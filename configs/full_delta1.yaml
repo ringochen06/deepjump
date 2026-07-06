@@ -1,0 +1,37 @@
+# DeepJump-lite: Ca + heavy-atom offsets, delta = 1 ns.
+# Same net as ca_delta1 but the transport head also predicts V_hat_1, and the
+# loss adds a heavy-atom offset term (w_offset). For Ca-only vs Ca+offset comparison.
+data:
+  root: ~/hkucds/data/mdcath
+  domains: []
+  temperatures: [320]
+  replicas: [0]
+  delta_frames: 1
+  crop_length: 128
+  val_fraction: 0.2
+  noise_sigma: 0.1
+  seed: 0
+
+model:
+  hidden: 32
+  vector_channels: 16
+  num_heads: 4
+  cond_layers: 6
+  transport_layers: 6
+  seq_embed_ks: 32
+  num_dist_basis: 16
+  dist_cutoff: 25.0
+  predict_heavy: true
+
+train:
+  batch_size: 4
+  lr: 1.0e-3
+  grad_clip: 0.1
+  max_steps: 6000
+  val_every: 250
+  log_every: 25
+  huber_delta: 1.0
+  w_offset: 1.0
+  device: auto
+  out_dir: runs/full_delta1
+  seed: 0

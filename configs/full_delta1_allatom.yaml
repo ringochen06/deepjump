@@ -1,0 +1,41 @@
+# DeepJump-lite: full 25 A all-atom pairwise Huber loss (the paper's Vector-Map loss).
+# Reconstructs absolute all-atom coords from (P, V) and supervises 3D difference vectors
+# between every atom pair within 25 A. crop=64 to bound the O(M^2) pair tensor on MPS.
+data:
+  root: ~/hkucds/data/mdcath
+  domains: []
+  temperatures: [320]
+  replicas: [0]
+  delta_frames: 1
+  crop_length: 64
+  val_fraction: 0.2
+  noise_sigma: 0.1
+  unroll: 1
+  seed: 0
+
+model:
+  hidden: 32
+  vector_channels: 16
+  num_heads: 4
+  cond_layers: 6
+  transport_layers: 6
+  seq_embed_ks: 32
+  num_dist_basis: 16
+  dist_cutoff: 25.0
+  predict_heavy: true
+  input_aug_sigma: 0.0
+
+train:
+  batch_size: 4
+  lr: 1.0e-3
+  grad_clip: 0.1
+  max_steps: 6000
+  val_every: 250
+  log_every: 25
+  huber_delta: 1.0
+  w_offset: 0.0
+  w_allatom: 1.0
+  w_unroll: 0.0
+  device: auto
+  out_dir: runs/full_delta1_allatom
+  seed: 0

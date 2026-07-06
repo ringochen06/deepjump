@@ -1,0 +1,39 @@
+# DeepJump-lite: Ca + heavy, delta=1 ns, WITH input-augmentation training for
+# rollout robustness. Same as full_delta1 but the conditioner input X_t is noised
+# during training (input_aug_sigma), teaching the model to recover from imperfect
+# (own-prediction) inputs it faces during a rollout.
+data:
+  root: ~/hkucds/data/mdcath
+  domains: []
+  temperatures: [320]
+  replicas: [0]
+  delta_frames: 1
+  crop_length: 128
+  val_fraction: 0.2
+  noise_sigma: 0.1
+  seed: 0
+
+model:
+  hidden: 32
+  vector_channels: 16
+  num_heads: 4
+  cond_layers: 6
+  transport_layers: 6
+  seq_embed_ks: 32
+  num_dist_basis: 16
+  dist_cutoff: 25.0
+  predict_heavy: true
+  input_aug_sigma: 1.0
+
+train:
+  batch_size: 4
+  lr: 1.0e-3
+  grad_clip: 0.1
+  max_steps: 6000
+  val_every: 250
+  log_every: 25
+  huber_delta: 1.0
+  w_offset: 1.0
+  device: auto
+  out_dir: runs/full_delta1_aug
+  seed: 0

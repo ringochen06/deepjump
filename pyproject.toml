@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepjump"
+version = "0.1.0"
+description = "DeepJump-lite: conditional conformational jump on mdCATH (plain-PyTorch reproduction)"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "numpy",
+    "h5py",
+    "huggingface_hub",
+    "tqdm",
+    "pyyaml",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

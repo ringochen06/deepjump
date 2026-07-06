@@ -1,0 +1,36 @@
+# DeepJump-lite: Ca-only, delta = 10 ns (10 frames). Same net as ca_delta1 for a
+# clean delta=1 vs delta=10 comparison (acceleration/accuracy tradeoff).
+data:
+  root: ~/hkucds/data/mdcath
+  domains: []
+  temperatures: [320]
+  replicas: [0]
+  delta_frames: 10      # 10 frames == 10 ns
+  crop_length: 128
+  val_fraction: 0.2
+  noise_sigma: 0.1
+  seed: 0
+
+model:
+  hidden: 32
+  vector_channels: 16
+  num_heads: 4
+  cond_layers: 6
+  transport_layers: 6
+  seq_embed_ks: 32
+  num_dist_basis: 16
+  dist_cutoff: 25.0
+  predict_heavy: false
+
+train:
+  batch_size: 4
+  lr: 1.0e-3
+  grad_clip: 0.1
+  max_steps: 6000
+  val_every: 250
+  log_every: 25
+  huber_delta: 1.0
+  w_offset: 0.0
+  device: auto
+  out_dir: runs/ca_delta10
+  seed: 0

@@ -1,0 +1,31 @@
+# data (downloaded mdCATH files live outside the repo, but ignore any local copies)
+data/
+*.h5
+*.hdf5
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# training artifacts
+runs/
+checkpoints/
+*.ckpt
+*.pt
+logs/
+wandb/
+
+# env
+.venv/
+.env
+
+# os / editor
+.DS_Store
+.vscode/
+.idea/
