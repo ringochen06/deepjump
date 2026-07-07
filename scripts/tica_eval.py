@@ -76,6 +76,7 @@ def main():
     ap.add_argument("--sigma", type=float, default=None, help="override tau=0 noise sigma")
     ap.add_argument("--steps", type=int, default=20)
     ap.add_argument("--lag", type=int, default=1)
+    ap.add_argument("--domain", default=None, help="evaluate on this domain id (for fair cross-model compare)")
     ap.add_argument("--out", default="docs/tica.png")
     args = ap.parse_args()
 
@@ -87,8 +88,15 @@ def main():
     model.load_state_dict(ck["model"]); model.eval()
 
     files = discover_domains(cd["root"])
-    _, val = split_domains(files, cd["val_fraction"], cd["seed"])
-    h = _DomainHandle(sorted(val)[0]); layout = h.layout
+    if args.domain:
+        match = [f for f in files if args.domain in f.name]
+        if not match:
+            raise SystemExit(f"domain {args.domain} not found under {cd['root']}")
+        chosen = match[0]
+    else:
+        _, val = split_domains(files, cd["val_fraction"], cd["seed"])
+        chosen = sorted(val)[0]
+    h = _DomainHandle(chosen); layout = h.layout
     temp, rep = cd["temperatures"][0], cd["replicas"][0]
     nf = h.replicas(temp, [rep])[0][2]
     N = layout.num_residues

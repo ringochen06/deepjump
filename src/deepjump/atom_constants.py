@@ -72,6 +72,28 @@ for _res, _order in HEAVY_ATOM_ORDER.items():
     assert len(_order) <= MAX_HEAVY, f"{_res} has {len(_order)} > {MAX_HEAVY} heavy atoms"
 
 
+# Symmetric sidechain atom pairs whose labelling is arbitrary (mirror-equivalent).
+# DeepJump/Ophiuchus handle these with an l=2 encoding; we instead canonicalise the pair
+# order by a rotation-invariant key (see representation.canonicalize_symmetric).
+_SYMMETRIC_PAIRS: dict[str, list[tuple[str, str]]] = {
+    "ASP": [("OD1", "OD2")],
+    "GLU": [("OE1", "OE2")],
+    "PHE": [("CD1", "CD2"), ("CE1", "CE2")],
+    "TYR": [("CD1", "CD2"), ("CE1", "CE2")],
+    "ARG": [("NH1", "NH2")],
+}
+
+# residue index -> list of (slotA, slotB) into the [13] heavy-atom axis
+SYMMETRIC_SLOTS: dict[int, list[tuple[int, int]]] = {}
+for _res, _pairs in _SYMMETRIC_PAIRS.items():
+    _idx = RESIDUE_TO_INDEX[_res]
+    _slotmap = HEAVY_ATOM_INDEX[_res]
+    SYMMETRIC_SLOTS[_idx] = [(_slotmap[a], _slotmap[b]) for a, b in _pairs]
+
+# N atom lives in slot 0 (backbone order [N, C, O, ...]) -- used as the asymmetric reference.
+N_SLOT = 0
+
+
 def canonical_resname(resname: str) -> str:
     """Map a raw residue name to a standard 3-letter code (or 'UNK')."""
     r = resname.strip().upper()

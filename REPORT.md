@@ -70,11 +70,21 @@ rollout does *not* reproduce the equilibrium landscape (under-explores). See `do
    rollout under-explores — full closure needs deeper unrolling / energy MH / SDE / two-sided interpolant.
 4. **Larger δ = bigger, harder jump** (no-op 1.58→2.25 for δ=1→10), but 10× time only
    moves ~1.4× as far — protein motion is bounded, which is why large-δ jumps accelerate MD.
-5. **Distributionally the model under-explores** (TICA, `docs/tica.png`): JSD(model, real) = 0.58
-   vs start-only 0.38 — even the stable rollout does not sample the real equilibrium landscape.
-   Better single-step/geometry ≠ correct ensemble; that gap is the whole point of the paper's eval.
-6. **Capacity helps** (H=64 beats H=32 at every τ) and the **faithful 25 Å all-atom loss** trains
-   cleanly — both are drop-in improvements toward the full method.
+5. **Distributional match improves with scale + stochastic sampling** (TICA conditional ensemble,
+   same domain): H=64/30-dom/δ=1 JSD **0.58** (mean) → **0.42** (K stochastic ODE single-jumps, the
+   DeepJump-native ensemble) → **0.39** (H=128/80-dom/multi-δ). The **deepest run so far**
+   (`configs/faithful_scaled_v2.yaml`, H=128, **200 domains**, 60k steps, multi-δ) reaches
+   **JSD 0.347** on held-out domain `1e8rA00` (its start-only floor is 0.287; `docs/tica_faithful.png`)
+   — the closest-to-floor result yet. Not fully closed but monotonic as scale increases — the model
+   goes from one-corner coverage to filling the real multi-basin landscape (`docs/tica_scaled.png`).
+   **This answers "is it a scale problem?": largely yes** — the fix is the paper's recipe (bigger H,
+   more domains, more steps), not architecture; we're at ~8% of the paper's training even now.
+   **But more steps ≠ better on small data:** the same config at 60k steps (vs 40k) *regresses*
+   (conditional TICA 0.347 → 0.545) — overfitting. The bottleneck has shifted from training *time*
+   to data *diversity* (more domains, not more steps).
+6. **Capacity helps** (H=64 beats H=32 at every τ; H=128 further); **25 Å all-atom Vector-Map loss**,
+   **multi-scale δ (1/10/100)**, and **symmetric-sidechain canonicalization** all train cleanly —
+   drop-in steps toward the full method.
 
 ## 4. Differences from the DeepJump paper
 
@@ -103,7 +113,8 @@ kinetics presume a stable, unbiased sampler we do not yet have (§3, finding 3).
   (3-step unroll + gate) but does not sample the right ensemble (JSD 0.58). Deeper unrolling,
   energy-based MH acceptance, or an SDE / two-sided stochastic interpolant (EquiJump) are the paths.
 - Symmetric-sidechain l=2 encoding; δ=100 ns; MSM kinetics / fast-folder metrics (need DESRES data).
-- Done this round: 25 Å all-atom loss, H=64 sweep, k-step unrolled training, TICA eval.
+- Done this round: 25 Å all-atom loss, H=64 sweep, k-step unrolled training, TICA eval,
+  and the deepest scale run (H=128, 200 domains, multi-δ → conditional TICA JSD 0.347 on `1e8rA00`).
 
 ## 7. Reproduce
 

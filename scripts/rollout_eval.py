@@ -70,7 +70,8 @@ def main():
     device = resolve_device("auto")
     model, cfg = load_model(args.ckpt, device)
     cd = cfg["data"]
-    delta = cd["delta_frames"]
+    df = cd["delta_frames"]
+    delta = df if isinstance(df, int) else int(df[0])  # multi-delta model: roll at the smallest
 
     files = discover_domains(cd["root"])
     _, val = split_domains(files, cd["val_fraction"], cd["seed"])

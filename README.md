@@ -96,7 +96,7 @@ differences from the paper, honest findings, next steps).
 ## Stage-1 result (honest)
 
 Trained H=32 (114k params), Cα, δ=1 ns, on a 30-domain mdCATH subset (24 train /
-6 held-out val domains, ~10.6k train pairs, MPS). `pytest` 11/11; fast-dev overfit
+6 held-out val domains, ~10.6k train pairs, MPS). `pytest` 14/14; fast-dev overfit
 collapses loss 6.1 → 0.003. On held-out data, CA RMSD as a function of the latent
 time τ (`scripts/diagnose_tau.py`), with the earlier 5-domain run for comparison:
 
@@ -192,12 +192,44 @@ energy-based MH, or an SDE / two-sided interpolant (EquiJump).
 Vector-Map loss** (`configs/full_delta1_allatom.yaml`) trains cleanly and modestly beats the
 Cα+offset loss (ODE 2.44→1.96).
 
+**Scale test (H=128, 80 domains, multi-δ, `configs/faithful_scaled.yaml`, `unroll=1` = pure DeepJump).**
+Scaling up moved the needle on both fronts. Single-step field accuracy jumped (τ=0.9 0.42→**0.16**).
+Distributionally, with the DeepJump-native **stochastic conditional ensemble** (`--gen conditional`),
+the model went from *collapsing to a corner* (small models) to **tracing the full real conformational
+manifold** (`docs/tica_scaled.png`) — it now explores both arms of the landscape. JSD is still ~0.45
+(over-dispersed, and this domain's start-only baseline is a tight 0.21), and single-step τ=0 still
+≈ no-op (fundamental to a deterministic mean-predictor). So **scale is clearly a major lever** — the
+failure mode changed from "under-explore/collapse" to "roughly-right-shape-but-imprecise-density";
+closing the rest plausibly needs continued scale toward the paper's regime (5398 domains, 500k steps).
+
 **Distributional evaluation (TICA).** `scripts/tica_eval.py` fits TICA on a real trajectory
-(SE(3)-invariant Cα-pairwise features) and compares the model's rollout ensemble to real MD in
-TIC space. Honest result: **JSD(model, real) = 0.58 > start-only 0.38** — even the *stable*
-gated rollout does **not** reproduce the equilibrium landscape; it under-explores and drifts to a
-biased region (`docs/tica.png`). This is the DeepJump evaluation philosophy at lite scale, and it
-quantifies the gap that a single-step model without a proper unbiased sampler cannot close.
+(SE(3)-invariant Cα-pairwise features) and compares a model-generated ensemble to real MD in TIC
+space. The right ensemble is **DeepJump-native**: `--gen conditional` draws K stochastic ODE
+single-jumps per start (different τ=0 noise ε) — geometrically stable, so it populates
+`p(X_{t+δ}|X_t)` correctly (the deterministic mean throws that diversity away).
+
+Two levers close the gap, and both are *within* DeepJump (no EquiJump SDE):
+
+| model | conditional-ensemble TICA JSD (↓) |
+|---|---|
+| H=64, 30 domains, δ=1 (mean rollout) | 0.58 |
+| H=64, 30 domains, δ=1 (stochastic ensemble) | 0.42 |
+| **H=128, 80 domains, multi-δ (stochastic ensemble)** | **0.39** |
+| no-dynamics baseline | 0.23 |
+
+Same held-out-style domain (`1ha8A00`). **Scale + stochastic ensemble sampling take JSD 0.58 → 0.39**
+— the model now covers the real multi-basin landscape (`docs/tica_scaled.png`) instead of one corner
+(`docs/tica.png`). Not fully closed (0.39 vs 0.23), but the trend is monotonic and points at the
+paper's recipe: **more scale** (paper: H=128, 5398 domains, 500k steps vs our H=128, 80, 40k) rather
+than architectural changes. This is the honest answer to "is it a scale problem?" — largely yes.
+
+**Deepest scale run** (`configs/faithful_scaled_v2.yaml`, H=128, **200 domains**, 60k steps, multi-δ)
+reaches conditional-ensemble TICA JSD **0.347** on held-out domain `1e8rA00` (its start-only floor is
+a tight 0.287; `docs/tica_faithful.png`) — the closest-to-floor result so far, continuing the same
+monotonic trend as scale climbs toward the paper's regime. On this domain the ladder is clean:
+H=32 **0.564** → H=64 **0.416** → H=128/200-dom **0.347** (floor 0.287) — ~78% of the gap closed.
+**But more steps ≠ better on small data:** the same config at 60k steps (vs 40k) *regresses* to 0.545
+— overfitting; the bottleneck is now data *diversity* (more domains), not training *time*.
 
 **Jump size δ=1 vs δ=10 ns** (`configs/ca_delta10.yaml`, same H=32 net). A 10 ns jump
 is bigger and harder — CA RMSD (Å):

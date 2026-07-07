@@ -88,7 +88,8 @@ def build_loaders(cfg):
     def make(fs, seed):
         return MdcathPairDataset(
             fs, cfg.data.temperatures, cfg.data.replicas, cfg.data.delta_frames,
-            cfg.data.crop_length, align=True, unroll=cfg.data.unroll, seed=seed,
+            cfg.data.crop_length, align=True, unroll=cfg.data.unroll,
+            canon_symmetric=cfg.data.canon_symmetric, seed=seed,
         )
 
     train_ds, val_ds = make(train_files, cfg.data.seed), make(val_files, cfg.data.seed + 1)

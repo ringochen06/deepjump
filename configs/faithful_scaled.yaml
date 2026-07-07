@@ -1,0 +1,49 @@
+# DeepJump-lite: the "faithful + scaled" config, exercising all four improvement axes
+# WITHIN DeepJump (no EquiJump SDE):
+#   (1) scale         -> H=128 (vec 64, ~paper's largest), 80 domains, long training
+#   (2) stochastic    -> evaluate with scripts/tica_eval.py --gen conditional (K stochastic
+#                         ODE single-jumps per start); training unchanged (pure x1/ODE)
+#   (3) multi-scale d -> delta_frames [1,10,100] jointly (one model, all jump sizes)
+#   (4) fidelity      -> canon_symmetric (symmetric sidechain labelling), crop 192, 25A loss off
+#                         (all-atom loss needs small crop; use it via full_delta1_allatom.yaml)
+# Note: unroll=1 (pure DeepJump, no self-conditioning crutch) so this is a clean test of
+# whether scale + native stochastic sampling alone close the distributional gap.
+data:
+  root: ~/hkucds/data/mdcath
+  domains: []
+  temperatures: [320]
+  replicas: [0]
+  delta_frames: [1, 10, 100]
+  crop_length: 192
+  val_fraction: 0.15
+  noise_sigma: 0.1
+  unroll: 1
+  canon_symmetric: true
+  seed: 0
+
+model:
+  hidden: 128
+  vector_channels: 64
+  num_heads: 4
+  cond_layers: 6
+  transport_layers: 6
+  seq_embed_ks: 32
+  num_dist_basis: 16
+  dist_cutoff: 25.0
+  predict_heavy: true
+  input_aug_sigma: 0.0
+
+train:
+  batch_size: 2
+  lr: 1.0e-3
+  grad_clip: 0.1
+  max_steps: 40000
+  val_every: 1000
+  log_every: 100
+  huber_delta: 1.0
+  w_offset: 1.0
+  w_allatom: 0.0
+  w_unroll: 0.0
+  device: auto
+  out_dir: runs/faithful_scaled
+  seed: 0

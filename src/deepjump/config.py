@@ -16,11 +16,12 @@ class DataConfig:
     domains: list[str] = field(default_factory=list)  # empty => use all found under root
     temperatures: list[int] = field(default_factory=lambda: [320])
     replicas: list[int] = field(default_factory=lambda: [0])
-    delta_frames: int = 1  # 1 frame == 1 ns in mdCATH
+    delta_frames: object = 1  # int, or list e.g. [1,10,100] for multi-scale delta training
     crop_length: int = 128
     val_fraction: float = 0.2  # fraction of domains held out for validation
     noise_sigma: float = 0.1  # sigma of gaussian added to X_t at tau=0 (Angstrom)
     unroll: int = 1  # number of future steps per sample (2 => self-conditioning training)
+    canon_symmetric: bool = False  # canonicalise symmetric sidechain atom labelling
     seed: int = 0
 
 

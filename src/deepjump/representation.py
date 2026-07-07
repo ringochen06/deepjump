@@ -153,6 +153,29 @@ def kabsch_align_target(P_t, V_t, P_1, V_1):
     return P_t_c, V_t, P_1_aln, V_1_aln
 
 
+def canonicalize_symmetric(V: torch.Tensor, res_index) -> torch.Tensor:
+    """Fix the arbitrary labelling of symmetric sidechain atom pairs (ASP/GLU/PHE/TYR/ARG).
+
+    For each symmetric pair (a, b), order them by a rotation/translation-invariant key --
+    the distance from each atom to the residue's backbone N (an asymmetric reference) --
+    swapping slots so the smaller-key atom is always first. V is [N, 13, 3] offsets from CA.
+    """
+    from .atom_constants import N_SLOT, SYMMETRIC_SLOTS
+
+    V = V.clone()
+    ri = res_index.tolist() if hasattr(res_index, "tolist") else list(res_index)
+    for r, rtype in enumerate(ri):
+        for (a, b) in SYMMETRIC_SLOTS.get(int(rtype), ()):
+            n = V[r, N_SLOT]
+            ka = (V[r, a] - n).norm()
+            kb = (V[r, b] - n).norm()
+            if ka > kb:
+                tmp = V[r, a].clone()
+                V[r, a] = V[r, b]
+                V[r, b] = tmp
+    return V
+
+
 def kabsch_align_futures(P_t, V_t, futures):
     """Center X_t at origin and Kabsch-align each future (P, V) into X_t's frame.
 
