@@ -47,6 +47,8 @@ scripts/
   download_mdcath.py    fetch N smallest mdCATH domains from HuggingFace
   inspect_h5.py         dump one domain's HDF5 structure
   train.py  eval.py
+  tica_eval.py          TICA distributional JSD (conditional / rollout ensemble)
+  tica_panel.py         paper-style TICA panel (overlay + FE heatmaps + marginals)
 configs/ca_delta1.yaml  Cα, δ=1 ns, H=32
 tests/                  pytest suite (equivariance / masking / shapes)
 ```
@@ -86,6 +88,7 @@ python scripts/train.py --config configs/full_delta1_allatom.yaml    # 25 A all-
 python scripts/train.py --config configs/full_delta1_h64.yaml        # H=64 capacity sweep
 python scripts/rollout_eval.py --ckpt runs/full_delta1_unroll3/last.ckpt --mode mean --gate  # rollout
 python scripts/tica_eval.py    --ckpt runs/full_delta1_unroll/last.ckpt   # TICA distributional JSD
+python scripts/tica_panel.py   --ckpt runs/faithful_scaled/last.ckpt --n 4  # paper-style TICA panel
 python scripts/plot_summary.py && python scripts/plot_stability.py   # docs/*.png
 pytest -q                                                            # correctness gate (14/14)
 ```
@@ -230,6 +233,19 @@ monotonic trend as scale climbs toward the paper's regime. On this domain the la
 H=32 **0.564** → H=64 **0.416** → H=128/200-dom **0.347** (floor 0.287) — ~78% of the gap closed.
 **But more steps ≠ better on small data:** the same config at 60k steps (vs 40k) *regresses* to 0.545
 — overfitting; the bottleneck is now data *diversity* (more domains), not training *time*.
+
+**Paper-style TICA panel figure** (`scripts/tica_panel.py` → `docs/tica_panel.png`). Reproduces the
+*layout* of the paper's equilibrium-ensemble figure — per held-out domain, one row of
+**[ Cα structure overlay | real-MD free energy | model free energy | TIC1/TIC2 marginals ]**, with
+free energy `F = -ln p` (kT), shared TIC binning so the two heatmaps are directly comparable, and
+marginals plotting real (black) vs model (blue). On held-out mdCATH domains the H=128 scaled model
+traces the same free-energy basins as real MD (JSD 0.24–0.32; the model wells are slightly
+over-dispersed). Honest scope: this is the paper's *figure grammar* on **our** data — held-out
+mdCATH domains (`1a92A00`, `1ce3A00`, …), **not** the DESRES fast folders (WW/NTL9/Lambda), and no
+folding. The reference trajectories are only ~450 frames (1 ns/frame), so the real-MD landscape is
+lightly Gaussian-smoothed (as all FE/KDE plots are) rather than dense like the paper's ×10⁵-frame
+Anton runs. What we reproduce is the analysis + plotting; what we still lack is the fast-folder
+reference data and the long stable rollout needed to *fold* — data/stability gaps, not a plotting gap.
 
 **Jump size δ=1 vs δ=10 ns** (`configs/ca_delta10.yaml`, same H=32 net). A 10 ns jump
 is bigger and harder — CA RMSD (Å):
