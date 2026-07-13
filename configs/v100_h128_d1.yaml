@@ -1,0 +1,53 @@
+# DeepJump reproduction on Huawei Cloud 8x V100 16GB (Beijing-4), delta = 1 ns.
+# V100 = Volta: fp16 ONLY (no bf16). 16 GB/GPU: keep crop small and use the (cheap)
+# heavy-atom offset loss, NOT the 25 A all-atom loss (its [B,M,M,3] tensor OOMs at 16 GB
+# until the chunked/neighbor-list version lands). Effective batch = 1 * 8 GPUs * 16 = 128.
+data:
+  root: /data/mdcath
+  manifest: /data/mdcath/manifest.json
+  domains: []
+  temperatures: [320, 348, 379, 413, 450]
+  replicas: [0, 1, 2, 3, 4]
+  delta_frames: 1
+  crop_length: 128          # 16 GB-safe; raise toward 192 only if memory allows
+  val_fraction: 0.02
+  noise_sigma: 0.1
+  unroll: 1
+  canon_symmetric: true
+  max_open_files: 96
+  seed: 0
+
+model:
+  hidden: 128               # try 64 first if you hit OOM (H=64 is the paper's main-result config)
+  vector_channels: 64
+  num_heads: 4
+  cond_layers: 6
+  transport_layers: 6
+  seq_embed_ks: 32
+  num_dist_basis: 16
+  dist_cutoff: 25.0
+  predict_heavy: true
+  input_aug_sigma: 0.0
+
+train:
+  batch_size: 1             # per GPU (16 GB); bump to 2 + halve grad_accum if it fits
+  grad_accum: 16            # 1 * 8 * 16 = effective 128
+  lr: 5.0e-3
+  lr_final: 3.0e-3
+  warmup_steps: 2000
+  grad_clip: 0.1
+  max_steps: 100000         # validation run; set 500000 for the full paper schedule
+  val_every: 2000
+  log_every: 100
+  ckpt_every: 5000
+  keep_last_k: 5
+  huber_delta: 1.0
+  w_offset: 1.0             # heavy-atom offset loss (cheap). all-atom loss needs chunking for 16 GB
+  w_allatom: 0.0
+  w_unroll: 0.0
+  amp: true
+  amp_dtype: fp16           # V100 has no bf16
+  num_workers: 8
+  device: cuda
+  out_dir: runs/v100_h128_d1
+  seed: 0
