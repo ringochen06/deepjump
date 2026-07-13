@@ -1,5 +1,6 @@
 # data (downloaded mdCATH files live outside the repo, but ignore any local copies)
-data/
+# NOTE: root-anchored so it does NOT match the src/deepjump/data/ package.
+/data/
 *.h5
 *.hdf5
 

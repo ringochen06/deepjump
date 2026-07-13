@@ -22,6 +22,8 @@ class DataConfig:
     noise_sigma: float = 0.1  # sigma of gaussian added to X_t at tau=0 (Angstrom)
     unroll: int = 1  # number of future steps per sample (2 => self-conditioning training)
     canon_symmetric: bool = False  # canonicalise symmetric sidechain atom labelling
+    manifest: str = ""  # path to manifest.json (build_manifest.py); "" => scan files at init
+    max_open_files: int = 64  # per-worker LRU cap on open h5 handles (ulimit-safe)
     seed: int = 0
 
 
@@ -54,6 +56,16 @@ class TrainConfig:
     device: str = "auto"  # auto -> mps if available else cpu
     out_dir: str = "runs/ca_delta1"
     seed: int = 0
+    # ---- distributed / scale (train_ddp.py) --------------------------------
+    num_workers: int = 0  # dataloader workers per process (cloud: 8-16)
+    grad_accum: int = 1  # gradient accumulation steps (effective_batch = batch*world*accum)
+    amp: bool = False  # mixed precision (bf16/fp16 autocast) -- enable on A100/V100
+    amp_dtype: str = "bf16"  # bf16 (A100, no scaler) or fp16 (V100, needs GradScaler)
+    lr_final: float = 0.0  # if >0, linearly decay lr -> lr_final over max_steps (paper: 5e-3->3e-3)
+    warmup_steps: int = 0  # linear LR warmup
+    ckpt_every: int = 5000  # steps between full (model+opt+sched) checkpoints
+    keep_last_k: int = 3  # rolling checkpoints to keep
+    resume: str = ""  # path to a checkpoint to resume optimizer/scheduler/step from
 
 
 @dataclass
