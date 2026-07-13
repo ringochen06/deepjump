@@ -16,7 +16,7 @@ Verified against the current Huawei Cloud purchase pages:
 - **Beijing-4** offers T4 / P4 / V100; the largest is **8× V100 16 GB**.
   - Correct flavor for 8× V100 16 GB = **P2v `p2v.16xlarge.8`** (64 vCPU, 512 GiB RAM),
     ~**¥131.50/hour ≈ ¥63,118/month** (compute only, excl. storage/network).
-  - `p2v.2xlarge.1` = **1× V100 16 GB** (validation).
+  - `p2v.2xlarge.8` = **1× V100 16 GB** (validation).
   - `P2s` is V100 **32 GB** but max **2 cards** — not usable for 8-way DDP.
 - Ulanqab-1: max 2× V100 32 GB, pay-as-you-go currently unavailable.
 - Account quota: 200 ECS / 800 vCPU / ~1.6 TiB RAM (all unused) — plenty for `p2v.16xlarge.8`
@@ -65,7 +65,7 @@ Still out of scope: fast-folder headline numbers (JSD/ΔG/MFPT/ab-initio) — no
 4. **OBS bucket** — for raw mdCATH + checkpoint archival (cheap, durable, survives instance deletion).
    Note the **AK/SK** for `obsutil`.
 5. **ECS instance**:
-   - Flavor: **validation** = `p2v.2xlarge.1` (1× V100 16 GB) or a cheaper T4 (Pi2); **formal** =
+   - Flavor: **validation** = `p2v.2xlarge.8` (1× V100 16 GB) or a cheaper T4 (Pi2); **formal** =
      `p2v.16xlarge.8` (8× V100 16 GB). **Pay-as-you-go.**
    - **Image**: a **GPU-accelerated public image with the Tesla driver + CUDA pre-installed**
      (Ubuntu 20.04/22.04) — avoids manual driver setup.

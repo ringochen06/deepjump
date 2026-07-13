@@ -143,7 +143,13 @@ def main():
               f"train_samples={len(train_ds)} val_samples={len(val_ds)} "
               f"train_domains={len(train_files)} val_domains={len(val_files)}")
     if world > 1:
-        model = DDP(model, device_ids=[local], find_unused_parameters=cfg.train.w_unroll > 0)
+        # find_unused_parameters is needed if any parameter gets no gradient in a step:
+        #  - w_unroll>0 does multiple forwards; or
+        #  - predict_heavy=True with NO V-loss (w_offset=w_allatom=0) leaves head_v unused.
+        # Without it, DDP's reducer stalls and gradients are silently under-synchronised.
+        heavy_unused = cfg.model.predict_heavy and cfg.train.w_offset == 0 and cfg.train.w_allatom == 0
+        find_unused = cfg.train.w_unroll > 0 or heavy_unused
+        model = DDP(model, device_ids=[local], find_unused_parameters=find_unused)
     core = model.module if hasattr(model, "module") else model
     opt = torch.optim.Adam(model.parameters(), lr=cfg.train.lr)
 
@@ -184,8 +190,10 @@ def main():
             ctx = model.no_sync() if (world > 1 and not sync) else _nullctx()
             with ctx:
                 with torch.autocast("cuda", dtype=amp_dtype, enabled=cfg.train.amp):
-                    out = core(batch)
-                    loss, comps = total_loss(out, batch, cfg, core)
+                    # MUST call the DDP-wrapped `model` (not `core`) so the backward
+                    # autograd hooks fire and gradients are all-reduced across ranks.
+                    out = model(batch)
+                    loss, comps = total_loss(out, batch, cfg, model)
                     loss = loss / accum
                 scaler.scale(loss).backward()
             loss_val += loss.item()

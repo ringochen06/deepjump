@@ -33,7 +33,11 @@ class EquivLinear(nn.Module):
         nn.init.xavier_uniform_(self.weight)
 
     def forward(self, vec: torch.Tensor) -> torch.Tensor:
-        return torch.einsum("...cd,oc->...od", vec, self.weight)
+        # matmul(weight[c_out,c_in], vec[...,c_in,3]) -> [...,c_out,3]. Equivalent to
+        # einsum("...cd,oc->...od") but yields CONTIGUOUS weight grads, which DDP's bucket
+        # reducer requires to all-reduce correctly (einsum grads are non-contiguous and get
+        # silently dropped from sync -- see tests/test_ddp_sync.py).
+        return torch.matmul(self.weight, vec)
 
 
 class ScalarVectorLayerNorm(nn.Module):
