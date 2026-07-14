@@ -143,7 +143,13 @@ def main():
               f"train_samples={len(train_ds)} val_samples={len(val_ds)} "
               f"train_domains={len(train_files)} val_domains={len(val_files)}")
     if world > 1:
-        model = DDP(model, device_ids=[local], find_unused_parameters=cfg.train.w_unroll > 0)
+        # find_unused_parameters is needed if any parameter gets no gradient in a step:
+        #  - w_unroll>0 does multiple forwards; or
+        #  - predict_heavy=True with NO V-loss (w_offset=w_allatom=0) leaves head_v unused.
+        # Without it, DDP's reducer stalls and gradients are silently under-synchronised.
+        heavy_unused = cfg.model.predict_heavy and cfg.train.w_offset == 0 and cfg.train.w_allatom == 0
+        find_unused = cfg.train.w_unroll > 0 or heavy_unused
+        model = DDP(model, device_ids=[local], find_unused_parameters=find_unused)
     core = model.module if hasattr(model, "module") else model
     opt = torch.optim.Adam(model.parameters(), lr=cfg.train.lr)
 
@@ -166,12 +172,14 @@ def main():
     data_iter = iter(train_loader)
     epoch = 0
     t0 = time.time()
+    data_wait = 0.0  # seconds spent waiting on the dataloader per log window
     while step < cfg.train.max_steps:
         for g in opt.param_groups:
             g["lr"] = lr_at(step, cfg)
         opt.zero_grad(set_to_none=True)
         loss_val = 0.0
         for micro in range(accum):
+            t_data = time.time()
             try:
                 batch = next(data_iter)
             except StopIteration:
@@ -179,13 +187,16 @@ def main():
                 sampler.set_epoch(epoch)
                 data_iter = iter(train_loader)
                 batch = next(data_iter)
+            data_wait += time.time() - t_data
             batch = move_batch(batch, device)
             sync = micro == accum - 1 or world == 1
             ctx = model.no_sync() if (world > 1 and not sync) else _nullctx()
             with ctx:
                 with torch.autocast("cuda", dtype=amp_dtype, enabled=cfg.train.amp):
-                    out = core(batch)
-                    loss, comps = total_loss(out, batch, cfg, core)
+                    # MUST call the DDP-wrapped `model` (not `core`) so the backward
+                    # autograd hooks fire and gradients are all-reduced across ranks.
+                    out = model(batch)
+                    loss, comps = total_loss(out, batch, cfg, model)
                     loss = loss / accum
                 scaler.scale(loss).backward()
             loss_val += loss.item()
@@ -196,9 +207,18 @@ def main():
         step += 1
 
         if is_main(rank) and step % cfg.train.log_every == 0:
-            rate = cfg.train.log_every / (time.time() - t0); t0 = time.time()
+            elapsed = time.time() - t0
+            rate = cfg.train.log_every / elapsed
+            data_pct = 100 * data_wait / elapsed if elapsed > 0 else 0
+            # peakGPU = cumulative peak allocated over the WHOLE run (max_memory_allocated is
+            # never reset), i.e. the high-water mark that decides if crop/batch fits 16 GB.
+            mem = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+            t0 = time.time(); data_wait = 0.0
             print(f"step {step:>7}/{cfg.train.max_steps}  loss {loss_val:.4f}  "
-                  f"lr {opt.param_groups[0]['lr']:.2e}  {rate:.2f} it/s")
+                  f"lr {opt.param_groups[0]['lr']:.2e}  {rate:.2f} it/s  "
+                  f"{1000/rate:.0f} ms/step  peakGPU(cum) {mem:.1f}GB  data {data_pct:.0f}%")
+
+        did_val_or_ckpt = False
         if is_main(rank) and (step % cfg.train.val_every == 0 or step == cfg.train.max_steps):
             m = evaluate(model, val_loader, device, cfg, amp_dtype)
             m["step"] = step
@@ -206,6 +226,7 @@ def main():
             (out_dir / "history.json").write_text(json.dumps(history, indent=2))
             print(f"  [val] step {step}  loss {m['val_loss']:.4f}  rmsd {m['val_rmsd']:.3f} "
                   f"(no-op {m['noop_rmsd']:.3f})")
+            did_val_or_ckpt = True
         if is_main(rank) and (step % cfg.train.ckpt_every == 0 or step == cfg.train.max_steps):
             p = out_dir / f"ckpt_{step}.pt"
             save_ckpt(p, core, opt, step, cfg)
@@ -214,6 +235,11 @@ def main():
             while len(saved_ckpts) > cfg.train.keep_last_k:
                 old = saved_ckpts.pop(0)
                 old.unlink(missing_ok=True)
+            did_val_or_ckpt = True
+        # Exclude validation/checkpoint time from the NEXT it/s window (else the step after a
+        # val/ckpt looks artificially slow). Reset the timing baseline here.
+        if did_val_or_ckpt:
+            t0 = time.time(); data_wait = 0.0
 
     if world > 1:
         dist.barrier(); dist.destroy_process_group()
