@@ -12,12 +12,14 @@ from .losses import (
 
 
 def _step_loss(P_hat, V_hat, P_gt, V_gt, batch, cfg):
+    # Ca pairwise term, weighted by w_ca (default 1.0 = legacy behaviour). Set w_ca=0 to train
+    # on the all-atom Vector-Map loss alone (CA positions are already inside the all-atom set).
     ca = pairwise_vector_huber_loss(P_hat, P_gt, batch["residue_mask"], cfg.train.huber_delta)
-    loss = ca
+    loss = getattr(cfg.train, "w_ca", 1.0) * ca
     off_val = None
     if cfg.train.w_offset > 0 and V_hat is not None:
         off = heavy_atom_offset_loss(V_hat, V_gt, batch["atom_mask"], cfg.train.huber_delta)
-        loss = ca + cfg.train.w_offset * off
+        loss = loss + cfg.train.w_offset * off  # accumulate; do NOT reset (would drop w_ca weight)
         off_val = off.item()
     if cfg.train.w_allatom > 0 and V_hat is not None:
         aa = allatom_pairwise_huber_loss(
