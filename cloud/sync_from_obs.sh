@@ -18,7 +18,8 @@ command -v obsutil >/dev/null || { echo "!! obsutil not found -- install & 'obsu
 mkdir -p "$ROOT"
 
 echo ">> sync $BUCKET/$OBS_PREFIX -> $ROOT  (intra-region, no HuggingFace)"
-obsutil sync "$BUCKET/$OBS_PREFIX" "$ROOT"
+# Exclude any stray huggingface cache metadata that may have been staged into OBS.
+obsutil sync "$BUCKET/$OBS_PREFIX" "$ROOT" -exclude="*.cache/*"
 
 # The manifest was built during staging; rebuild only if it didn't come across.
 if [ ! -f "$ROOT/manifest.json" ]; then

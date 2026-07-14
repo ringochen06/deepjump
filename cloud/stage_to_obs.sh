@@ -46,7 +46,9 @@ python scripts/build_manifest.py --root "$ROOT" --out "$ROOT/manifest.json"
 nfiles=$(find "$ROOT" -name 'mdcath_dataset_*.h5' | wc -l | tr -d ' ')
 echo ">> [3/3] upload to OBS: $BUCKET/$OBS_PREFIX  ($nfiles h5 files + manifest)"
 # `obsutil sync` = incremental one-way sync of source dir INTO the destination prefix.
-obsutil sync "$ROOT" "$BUCKET/$OBS_PREFIX"
+# Exclude huggingface_hub's local-dir cache (.cache/huggingface/*): it is download-resume
+# metadata, useless in OBS, and would otherwise add thousands of tiny junk objects.
+obsutil sync "$ROOT" "$BUCKET/$OBS_PREFIX" -exclude="*.cache/*"
 
 echo ">> done. Data + manifest are in $BUCKET/$OBS_PREFIX."
 echo "   On the GPU instance:  BUCKET=$BUCKET bash cloud/sync_from_obs.sh"
