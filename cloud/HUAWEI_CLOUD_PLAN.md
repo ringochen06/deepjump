@@ -8,22 +8,20 @@
 
 ---
 
-## 0. Reality check: what hardware is actually available (2026)
+## 0. Hardware selection (generic)
 
-Verified against the current Huawei Cloud purchase pages:
-- **No A100 / A800** in Beijing-4, Ulanqab-1, Guiyang-1, Shanghai-1, or Guangzhou via self-service.
-  Getting A100 requires a **support ticket / whitelist** (ModelArts dedicated pool or BMS).
-- **Beijing-4** offers T4 / P4 / V100; the largest is **8× V100 16 GB**.
-  - Correct flavor for 8× V100 16 GB = **P2v `p2v.16xlarge.8`** (64 vCPU, 512 GiB RAM),
-    ~**¥131.50/hour ≈ ¥63,118/month** (compute only, excl. storage/network).
-  - `p2v.2xlarge.8` = **1× V100 16 GB** (validation).
-  - `P2s` is V100 **32 GB** but max **2 cards** — not usable for 8-way DDP.
-- Ulanqab-1: max 2× V100 32 GB, pay-as-you-go currently unavailable.
-- Account quota: 200 ECS / 800 vCPU / ~1.6 TiB RAM (all unused) — plenty for `p2v.16xlarge.8`
-  (64 vCPU). **GPU-card quota is not shown; file a ticket to confirm 8× V100 can be provisioned
-  before committing.**
+> ⚠️ **Flavors, prices, regional stock, and account quotas change often — verify on the Huawei
+> Cloud console before committing.** (Availability last cross-checked against the Beijing-4 console
+> in **2026-07**; live pricing/quota/purchase status is tracked separately, not in this repo.)
 
-**Consequence for training** (this drives all the config choices below):
+- **NVIDIA GPUs only** for this plan (the code is CUDA + DDP). A100/A800 are frequently **not
+  self-service** and may require a support ticket / whitelist (ModelArts dedicated pool or BMS).
+- A practical target is **8× V100 16 GB** on the **P2v** family (`p2v.16xlarge.8`); the single-GPU
+  validation flavor is `p2v.2xlarge.8`. (`P2s` is V100 32 GB but caps at 2 cards — not for 8-way DDP.)
+- Before provisioning: confirm the **GPU-card quota** for your target flavor (vCPU/RAM quota alone is
+  not enough), and check current price and regional stock on the console.
+
+**Consequence for training on 16 GB cards** (drives the config choices below):
 - **V100 = Volta → fp16 only (NO bf16).** Use `amp_dtype: fp16` (GradScaler; already wired).
 - **16 GB/card (not 80).** So **crop 128** (not 256), **per-GPU batch 1**, high grad-accum.
 - The paper's **25 Å all-atom Vector-Map loss materialises an O(M²) `[B,M,M,3]` tensor** and **OOMs
@@ -52,7 +50,7 @@ Still out of scope: fast-folder headline numbers (JSD/ΔG/MFPT/ab-initio) — no
 | Manifest builder | `scripts/build_manifest.py` | scan once → `manifest.json`; instant training startup |
 | DDP trainer | `scripts/train_ddp.py` | torchrun/NCCL, DistributedSampler, AMP (fp16/bf16), grad-accum to target batch, warmup + linear LR decay, rank-0 val/log/checkpoint, `--resume` |
 | Shared loss/schedule | `src/deepjump/training.py` | pairwise + offset + 25 Å all-atom losses; `lr_at` |
-| Configs | `configs/v100_h128_d1.yaml` (V100), `configs/paper_h128_d{1,10,100}.yaml` (A100 template) | ready to run |
+| Configs | `configs/v100_smoke.yaml` (single-GPU smoke), `configs/v100_h128_d1.yaml` (V100 formal), `configs/paper_h128_d{1,10,100}.yaml` (A100 template) | ready to run |
 | Cloud scripts | `cloud/{setup_env,download_data,run_ddp}.sh` | env / data / launch |
 
 ---
@@ -122,9 +120,9 @@ Once the manifest exists, training startup is instant (no per-file opens).
 ## 7. Training
 
 ```bash
-# STEP A - single-GPU smoke: temporarily set max_steps=2000 in the config, confirm it does not OOM
-# and measure it/s.
-CONFIG=configs/v100_h128_d1.yaml bash cloud/run_ddp.sh
+# STEP A - single-GPU SMOKE (~15 domains, 60 steps): confirms no OOM and measures peak GPU
+# memory + ms/step. Uses the dedicated smoke config (do NOT run the 100k formal config here).
+python scripts/train_ddp.py --config configs/v100_smoke.yaml     # direct python is fine for 1 GPU
 
 # STEP B - 8-GPU formal run (run_ddp.sh auto-uses all visible GPUs)
 CONFIG=configs/v100_h128_d1.yaml bash cloud/run_ddp.sh
@@ -133,11 +131,13 @@ CONFIG=configs/v100_h128_d1.yaml bash cloud/run_ddp.sh
 CONFIG=configs/v100_h128_d1.yaml RESUME=runs/v100_h128_d1/last.ckpt bash cloud/run_ddp.sh
 ```
 
-- **Effective batch** = `batch_size × world_size × grad_accum`. The V100 config uses
-  `1 × 8 × 16 = 128` (paper's global batch). If a GPU OOMs, keep batch 1 and raise grad_accum;
-  if memory is spare, try batch 2 / grad_accum 8, or crop 160.
-- **Monitoring**: rank-0 prints `it/s`, `loss`, `lr` and writes `runs/.../history.json` (honest τ=0
-  val + no-op baseline). Optional: `tensorboard --logdir runs/`.
+- **Effective batch** = `batch_size × world_size × grad_accum`. The formal V100 config uses
+  `1 × 8 × 16 = 128` (paper's global batch); on a single card that line prints `effective_batch=16`,
+  not 128. If a GPU OOMs, keep batch 1 and raise grad_accum; if memory is spare, try batch 2 or a
+  larger crop — decide from STEP A's measured peak memory.
+- **Monitoring**: rank-0 prints `loss`, `lr`, `it/s`, `ms/step`, `peakGPU(cum)` (whole-run high-water
+  mark) and `data %` (dataloader-wait fraction), and writes `runs/.../history.json` (honest τ=0 val +
+  no-op baseline). Optional: `tensorboard --logdir runs/`.
 - **Checkpoints**: every `ckpt_every` steps → `ckpt_<step>.pt` + `last.ckpt` (model+optimizer+step),
   keeping the last `keep_last_k`. **Periodically upload `last.ckpt` to OBS** so a reclaimed instance
   doesn't lose progress.
@@ -146,11 +146,12 @@ CONFIG=configs/v100_h128_d1.yaml RESUME=runs/v100_h128_d1/last.ckpt bash cloud/r
 
 ## 8. Cost & time — read before scaling up
 
-- **Measure real throughput in STEP A first** — do not burn 8 GPUs on an estimate. Rough guide:
-  crop 128 / H=128 / fp16 ≈ 1–2 it/s per card; with effective batch 128 and grad_accum 16, one
-  optimizer step processes 16 micro-batches/card → **~8–16 s/step**, so 100k steps can take **days**.
-- `p2v.16xlarge.8` ≈ **¥131.5/hour ≈ ¥3,156/day**. Therefore: **run δ=1 only, with a bounded step
-  budget (e.g. 50k–100k)** — do **not** launch 500k × 3 δ (tens of thousands of RMB).
+- **Measure real throughput in STEP A first** — do not burn 8 GPUs on an estimate. `ms/step` from the
+  smoke × `grad_accum` × `max_steps` gives the wall-clock; multiply by the current hourly price (check
+  the console — it changes) for the cost. Both peak memory and step time are **to be measured on the
+  instance**, not assumed here.
+- Because per-optimizer-step cost is high (`grad_accum` micro-batches each), **run δ=1 only with a
+  bounded step budget** (e.g. 50k–100k) rather than 500k × 3 δ. Scale only after the subset run passes.
 - **Stop/delete the GPU instance when not training** (keep the EVS data disk + OBS) — GPU-hours are
   by far the biggest cost.
 - **Recommended optimization before any serious run — chunked/neighbor-list 25 Å all-atom loss.**
@@ -180,9 +181,12 @@ CONFIG=configs/v100_h128_d1.yaml RESUME=runs/v100_h128_d1/last.ckpt bash cloud/r
 ```bash
 # env
 TORCH_CUDA=cu118 bash cloud/setup_env.sh && conda activate deepjump
-# data (validation subset)
+# smoke first: ~15 domains, single GPU, 60 steps (measure peak mem + ms/step)
+python scripts/download_mdcath.py --root /data/mdcath --n 15 --max-gb 0.6
+python scripts/build_manifest.py --root /data/mdcath --out /data/mdcath/manifest.json
+python scripts/train_ddp.py --config configs/v100_smoke.yaml
+# then validation subset + formal run (8x V100, delta=1)
 MODE=subset N=1000 ROOT=/data/mdcath bash cloud/download_data.sh
-# train (8x V100, delta=1)
 CONFIG=configs/v100_h128_d1.yaml bash cloud/run_ddp.sh
 # resume / evaluate
 CONFIG=configs/v100_h128_d1.yaml RESUME=runs/v100_h128_d1/last.ckpt bash cloud/run_ddp.sh
