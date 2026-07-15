@@ -21,7 +21,10 @@ BUCKET=${BUCKET:?set BUCKET=obs://your-bucket-name}
 ROOT=${ROOT:-/data/mdcath}              # local staging dir on THIS box
 MODE=${MODE:-subset}                    # subset | full
 SUBSET=${SUBSET:-configs/subset_1000.txt}
-OBS_PREFIX=${OBS_PREFIX:-mdcath}        # object key prefix inside the bucket
+OBS_PREFIX=${OBS_PREFIX:-mdcath}        # object key prefix inside the bucket -- one prefix per
+                                        # subset; never overwrite another subset's prefix
+SUBSET_STRATEGY=${SUBSET_STRATEGY:-unknown}   # recorded in staging_metadata.json
+SUBSET_SEED=${SUBSET_SEED:-0}                 # recorded in staging_metadata.json
 
 command -v obsutil >/dev/null || { echo "!! obsutil not found -- install & 'obsutil config' first"; exit 1; }
 mkdir -p "$ROOT"
@@ -40,11 +43,18 @@ else
   python scripts/download_mdcath.py --root "$ROOT" --domains-file "$SUBSET"
 fi
 
-echo ">> [2/3] build manifest locally (so the GPU box doesn't have to)"
+echo ">> [2/4] build manifest locally (so the GPU box doesn't have to)"
 python scripts/build_manifest.py --root "$ROOT" --out "$ROOT/manifest.json"
 
+echo ">> [3/4] record what was staged (subset copy + metadata travel WITH the data)"
+if [ "$MODE" != "full" ]; then
+  cp "$SUBSET" "$ROOT/subset.txt"
+  python scripts/write_staging_metadata.py --root "$ROOT" --subset "$SUBSET" \
+    --strategy "$SUBSET_STRATEGY" --seed "$SUBSET_SEED" --out "$ROOT/staging_metadata.json"
+fi
+
 nfiles=$(find "$ROOT" -name 'mdcath_dataset_*.h5' | wc -l | tr -d ' ')
-echo ">> [3/3] upload to OBS: $BUCKET/$OBS_PREFIX  ($nfiles h5 files + manifest)"
+echo ">> [4/4] upload to OBS: $BUCKET/$OBS_PREFIX  ($nfiles h5 files + manifest)"
 # `obsutil sync` = incremental one-way sync of source dir INTO the destination prefix.
 # Exclude huggingface_hub's local-dir cache (.cache/huggingface/*): it is download-resume
 # metadata, useless in OBS, and would otherwise add thousands of tiny junk objects.
