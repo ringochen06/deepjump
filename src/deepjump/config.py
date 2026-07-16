@@ -50,6 +50,7 @@ class TrainConfig:
     val_every: int = 50
     log_every: int = 10
     huber_delta: float = 1.0
+    w_ca: float = 1.0  # weight on the Ca pairwise-vector loss (backward-compat default 1.0)
     w_offset: float = 0.0  # weight on heavy-atom offset loss (0 => Ca-only)
     w_allatom: float = 0.0  # weight on 25A all-atom pairwise Huber loss
     w_unroll: float = 0.0  # weight on self-conditioned unroll step losses

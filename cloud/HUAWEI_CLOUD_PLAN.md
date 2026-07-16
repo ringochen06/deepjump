@@ -23,20 +23,21 @@
 
 **Consequence for training on 16 GB cards** (drives the config choices below):
 - **V100 = Volta → fp16 only (NO bf16).** Use `amp_dtype: fp16` (GradScaler; already wired).
-- **16 GB/card (not 80).** So **crop 128** (not 256), **per-GPU batch 1**, high grad-accum.
-- The paper's **25 Å all-atom Vector-Map loss materialises an O(M²) `[B,M,M,3]` tensor** and **OOMs
-  at 16 GB**. The V100 config therefore uses the cheaper **heavy-atom offset loss** by default. To
-  train the *faithful* all-atom loss on 16 GB you need a **chunked / neighbor-list implementation**
-  (§8, item 1) — not yet in the repo.
+- **16 GB/card (not 80).** The formal config `configs/v100_paper_d1.yaml` runs **crop 256, per-GPU
+  batch 16, grad_accum 1** → effective batch `16 × 8 = 128` (the paper's global batch).
+- The paper's **25 Å all-atom Vector-Map loss fits 16 GB at this setting** — **measured on 1× V100
+  16 GB: ~9.7 GB allocated / ~10.6 GB reserved, ~156 ms/step, no NaN/OOM** (real 257-residue domain,
+  batch 16). So the formal V100 config uses the **faithful all-atom loss** (`w_allatom=1`), not the
+  offset loss. (`configs/v100_h128_d1.yaml` keeps a lower-memory crop-128 / offset-loss fallback for
+  cards under memory pressure.)
 
 ---
 
 ## 1. What "near-paper" means here (expectation alignment)
 
-Aligned: H=128, Nh=4, 6+6 layers, global batch 128, Adam lr 5e-3→3e-3, grad-clip 0.1, long
-schedule, per-δ models (1/10/100), 5 temps × 5 replicas, DDP.
-Compromised on V100: **crop 128** (vs 256), **offset loss** (vs 25 Å all-atom, until chunked),
-**fp16** (vs bf16), **bounded step count** (cost — §8).
+Aligned: H=128, Nh=4, 6+6 layers, global batch 128, **crop 256**, **25 Å all-atom loss** (fits 16 GB,
+measured), Adam lr 5e-3→3e-3, grad-clip 0.1, per-δ models (1/10/100), 5 temps × 5 replicas, DDP.
+Compromised on V100: **fp16** (vs bf16), **bounded step count** (cost — §8).
 Still out of scope: fast-folder headline numbers (JSD/ΔG/MFPT/ab-initio) — no DESRES data; we use
 **mdCATH TICA distributional JSD** as the reachable distributional metric.
 
@@ -50,8 +51,9 @@ Still out of scope: fast-folder headline numbers (JSD/ΔG/MFPT/ab-initio) — no
 | Manifest builder | `scripts/build_manifest.py` | scan once → `manifest.json`; instant training startup |
 | DDP trainer | `scripts/train_ddp.py` | torchrun/NCCL, DistributedSampler, AMP (fp16/bf16), grad-accum to target batch, warmup + linear LR decay, rank-0 val/log/checkpoint, `--resume` |
 | Shared loss/schedule | `src/deepjump/training.py` | pairwise + offset + 25 Å all-atom losses; `lr_at` |
-| Configs | `configs/v100_smoke.yaml` (single-GPU smoke), `configs/v100_h128_d1.yaml` (V100 formal), `configs/paper_h128_d{1,10,100}.yaml` (A100 template) | ready to run |
-| Cloud scripts | `cloud/{setup_env,download_data,run_ddp}.sh` | env / data / launch |
+| Configs | `configs/v100_smoke.yaml` (1-GPU smoke), `configs/v100_ddp_smoke.yaml` (8-GPU 100-step smoke, same footprint as formal), `configs/v100_paper_d1.yaml` (**V100 formal**: crop 256, all-atom loss), `configs/v100_h128_d1.yaml` (crop-128/offset-loss fallback), `configs/paper_h128_d{1,10,100}.yaml` (A100 template) | ready to run |
+| Frozen subset | `configs/subset_1000.txt` | reproducible 1000-domain id list (306 GB) so staging + manifest match exactly |
+| Cloud scripts | `cloud/{setup_env,download_data,run_ddp}.sh` + `cloud/{stage_to_obs,sync_from_obs,ckpt_to_obs}.sh` | env / data / launch + OBS staging & ckpt archival |
 
 ---
 
@@ -61,7 +63,11 @@ Still out of scope: fast-folder headline numbers (JSD/ΔG/MFPT/ab-initio) — no
 2. **Security group** — inbound allow **TCP 22 (SSH)** from **your own public IP only** (not 0.0.0.0/0).
 3. **Key pair** — Console → Key Pairs → create → download the `.pem` (use keys, not passwords).
 4. **OBS bucket** — for raw mdCATH + checkpoint archival (cheap, durable, survives instance deletion).
-   Note the **AK/SK** for `obsutil`.
+   Note the **AK/SK** for `obsutil`. **Create it in the SAME region as the GPU instance** so the
+   later `obsutil sync` to the instance is an intra-region (fast, near-free) transfer, not a public
+   download. **Stage the data into OBS from a cheap CPU box BEFORE renting the 8-GPU instance** — see
+   §6. Frozen subset sizes (measured from the HF listing, 2026-07): **1000-domain subset = 306 GB**
+   (smallest domains, ≤0.7 GB each; 196–364 MB per file), **full dataset = 3.61 TB** (5398 files).
 5. **ECS instance**:
    - Flavor: **validation** = `p2v.2xlarge.8` (1× V100 16 GB) or a cheaper T4 (Pi2); **formal** =
      `p2v.16xlarge.8` (8× V100 16 GB). **Pay-as-you-go.**
@@ -69,7 +75,8 @@ Still out of scope: fast-folder headline numbers (JSD/ΔG/MFPT/ab-initio) — no
      (Ubuntu 20.04/22.04) — avoids manual driver setup.
    - **Disks**: 100 GB system disk **plus a data disk — EVS "Extreme SSD" 500 GB–1 TB — mounted at
      `/data`** as the dataloader's random-read hot store. (V100 ECS flavors generally have no local
-     NVMe, so use a fast EVS volume.)
+     NVMe, so use a fast EVS volume.) The 1000-domain subset is **306 GB**, so **500 GB EVS** is
+     enough for the validation run; size up only for the full 3.61 TB dataset.
    - Attach an **EIP** (for data download + SSH), select the **key pair** and **security group**.
 6. *(Only if you insist on A100)* ModelArts / support ticket for a whitelisted pool — not
    self-service; don't block on it.
@@ -86,6 +93,8 @@ nvidia-smi                            # confirm N x V100 are visible
 lsblk                                 # find the data disk (e.g. /dev/vdb)
 mkfs.ext4 /dev/vdb && mkdir -p /data && mount /dev/vdb /data
 # OBS access (install obsutil, configure AK/SK) — for data sync + checkpoint upload
+obsutil config -i=<AK> -k=<SK> -e=<obs-endpoint>
+BUCKET=obs://<your-bucket> bash cloud/obs_roundtrip_test.sh   # 2-file up/down sanity check
 ```
 
 ---
@@ -101,19 +110,30 @@ TORCH_CUDA=cu118 bash cloud/setup_env.sh && conda activate deepjump
 
 ---
 
-## 6. Data
+## 6. Data — OBS-first staging (do this BEFORE renting the 8-GPU instance)
+
+The 8× V100 instance bills by the GPU-hour, so it must **never** pull data over the public internet
+from HuggingFace. Instead: stage the subset into OBS once from a **cheap CPU box**, then the GPU
+instance only does an **intra-region `obsutil sync`** (fast, near-free, no HF).
 
 ```bash
-# validation: 1000 smallest domains to the local EVS disk, then build the manifest
-MODE=subset N=1000 ROOT=/data/mdcath bash cloud/download_data.sh
+# --- (A) on a CHEAP CPU box in the same region (or your laptop), NO GPU rented yet ---
+# 1. freeze the exact subset ids (already committed as configs/subset_1000.txt; re-run to refresh)
+python scripts/select_subset.py --n 1000 --max-gb 0.7 --out configs/subset_1000.txt   # 1000 doms, 306 GB
+# 2. HF download that subset -> build manifest -> upload both to OBS (obsutil configured with AK/SK)
+BUCKET=obs://<your-bucket> SUBSET=configs/subset_1000.txt bash cloud/stage_to_obs.sh
+#    (full dataset instead:  BUCKET=obs://<your-bucket> MODE=full bash cloud/stage_to_obs.sh)
 
-# full (only after deciding to scale): ~2-3 TB; prefer OBS then sync to local
-MODE=full ROOT=/data/mdcath bash cloud/download_data.sh
-# or:  obsutil sync obs://<bucket>/mdcath /data/mdcath && \
-#      python scripts/build_manifest.py --root /data/mdcath --out /data/mdcath/manifest.json
+# --- (B) later, ON the 8-GPU instance, right after boot ---
+BUCKET=obs://<your-bucket> bash cloud/sync_from_obs.sh          # OBS -> /data (intra-region, no HF)
 ```
 
-Once the manifest exists, training startup is instant (no per-file opens).
+Fallback (skip OBS, download straight to the instance — burns GPU-hours, not recommended for 8-GPU):
+```bash
+MODE=subset N=1000 ROOT=/data/mdcath bash cloud/download_data.sh
+```
+
+Once the manifest exists (staging builds it for you), training startup is instant (no per-file opens).
 
 ---
 
@@ -124,23 +144,40 @@ Once the manifest exists, training startup is instant (no per-file opens).
 # memory + ms/step. Uses the dedicated smoke config (do NOT run the 100k formal config here).
 python scripts/train_ddp.py --config configs/v100_smoke.yaml     # direct python is fine for 1 GPU
 
-# STEP B - 8-GPU formal run (run_ddp.sh auto-uses all visible GPUs)
-CONFIG=configs/v100_h128_d1.yaml bash cloud/run_ddp.sh
+# STEP B - 8-GPU 100-step DDP SMOKE (~minutes): confirms all 8 ranks sync over NCCL, per-GPU
+# memory fits 16 GB, DistributedSampler shards the real 5-temp x 5-replica data, and a mid-run
+# checkpoint is written + rotated. Verify BEFORE committing to the long run. See checklist below.
+CONFIG=configs/v100_ddp_smoke.yaml bash cloud/run_ddp.sh
 
-# resume (after preemption / restart)
-CONFIG=configs/v100_h128_d1.yaml RESUME=runs/v100_h128_d1/last.ckpt bash cloud/run_ddp.sh
+# STEP C - 8-GPU formal run (run_ddp.sh auto-uses all visible GPUs). Archive ckpts to OBS in bg.
+RUN_DIR=runs/v100_paper_d1 BUCKET=obs://<your-bucket> bash cloud/ckpt_to_obs.sh &
+CONFIG=configs/v100_paper_d1.yaml bash cloud/run_ddp.sh
+
+# resume (after preemption / restart): pull the ckpt dir back from OBS, then --resume
+obsutil sync obs://<your-bucket>/ckpts/v100_paper_d1 runs/v100_paper_d1
+CONFIG=configs/v100_paper_d1.yaml RESUME=runs/v100_paper_d1/last.ckpt bash cloud/run_ddp.sh
 ```
 
-- **Effective batch** = `batch_size × world_size × grad_accum`. The formal V100 config uses
-  `1 × 8 × 16 = 128` (paper's global batch); on a single card that line prints `effective_batch=16`,
-  not 128. If a GPU OOMs, keep batch 1 and raise grad_accum; if memory is spare, try batch 2 or a
-  larger crop — decide from STEP A's measured peak memory.
+**STEP B (100-step DDP smoke) — what to confirm before the long run** (same crop 256 / batch 16 /
+all-atom footprint as the formal run, so its peak-memory reading is the real one):
+- **8-card sync**: `nvidia-smi` shows all 8 GPUs busy; rank-0 log advances steps; `torchrun` spawns 8 procs.
+- **NCCL**: no `NCCL error` / hang at init; the run reaches step 10+ (first all-reduce succeeded). If it
+  hangs at start, set `NCCL_DEBUG=INFO` and check the security group allows intra-node loopback.
+- **Memory**: rank-0 `peakGPU(cum)` should land near the measured ~10.6 GB, safely under 16 GB. If a GPU
+  OOMs, drop `train.batch_size` 16→8 (halves memory) or `data.crop_length` 256→192.
+- **Checkpoint**: `runs/v100_ddp_smoke/` has `ckpt_50.pt`, `ckpt_100.pt` + `last.ckpt` after the run
+  (mid-run write at step 50 works; written atomically). Optionally test resume: `RESUME=runs/v100_ddp_smoke/last.ckpt`.
+
+- **Effective batch** = `batch_size × world_size × grad_accum`. The formal config uses
+  `16 × 8 × 1 = 128` (paper's global batch); on a single card that line prints `effective_batch=16`,
+  not 128. If a GPU OOMs, lower batch/crop; if memory is spare, raise batch or crop — decide from the
+  smoke's measured peak.
 - **Monitoring**: rank-0 prints `loss`, `lr`, `it/s`, `ms/step`, `peakGPU(cum)` (whole-run high-water
   mark) and `data %` (dataloader-wait fraction), and writes `runs/.../history.json` (honest τ=0 val +
   no-op baseline). Optional: `tensorboard --logdir runs/`.
-- **Checkpoints**: every `ckpt_every` steps → `ckpt_<step>.pt` + `last.ckpt` (model+optimizer+step),
-  keeping the last `keep_last_k`. **Periodically upload `last.ckpt` to OBS** so a reclaimed instance
-  doesn't lose progress.
+- **Checkpoints**: every `ckpt_every` steps → `ckpt_<step>.pt` + `last.ckpt` (model+optimizer+step,
+  written atomically via `.tmp` + `os.replace`), keeping the last `keep_last_k`. `cloud/ckpt_to_obs.sh`
+  syncs them to OBS every 10 min so a reclaimed instance doesn't lose progress.
 
 ---
 
@@ -154,10 +191,11 @@ CONFIG=configs/v100_h128_d1.yaml RESUME=runs/v100_h128_d1/last.ckpt bash cloud/r
   bounded step budget** (e.g. 50k–100k) rather than 500k × 3 δ. Scale only after the subset run passes.
 - **Stop/delete the GPU instance when not training** (keep the EVS data disk + OBS) — GPU-hours are
   by far the biggest cost.
-- **Recommended optimization before any serious run — chunked/neighbor-list 25 Å all-atom loss.**
-  The current all-atom loss builds the full `[B,M,M,3]` then masks (M=crop×14). A chunked version
-  that only computes pairs within 25 Å would **fit the faithful all-atom loss into 16 GB** and speed
-  things up. This is the single most valuable code change for a faithful V100 reproduction.
+- **Optional future optimization (NOT required) — chunked/neighbor-list 25 Å all-atom loss.** The
+  current all-atom loss builds the full `[B,M,M,3]` then masks (M=crop×14); it already fits 16 GB at
+  crop 256 / batch 16 (~10.6 GB measured). A chunked version computing only pairs within 25 Å would
+  free memory headroom for a larger crop/batch and could speed the step up — a nice-to-have, not a
+  blocker for the V100 run.
 
 ---
 
@@ -165,7 +203,7 @@ CONFIG=configs/v100_h128_d1.yaml RESUME=runs/v100_h128_d1/last.ckpt bash cloud/r
 
 | Risk | Mitigation |
 |---|---|
-| All-atom loss OOMs at 16 GB | V100 config uses offset loss; for faithful all-atom, implement chunked loss (§8) |
+| All-atom loss memory at 16 GB | fits at crop 256 / batch 16 (~10.6 GB measured); if a card OOMs, drop batch 16→8 or crop 256→192, or use the `v100_h128_d1.yaml` offset-loss fallback |
 | fp16 numerics (equivariant norms / LayerNorm → NaN) | GradScaler is wired; if NaN persists, keep sensitive modules in fp32 autocast, or lower the initial scale |
 | Instance reclaimed / preempted | upload `last.ckpt` to OBS regularly; `--resume` continues seamlessly |
 | Dataloader is the bottleneck (per-frame random reads) | data on local EVS SSD (not OBS); `num_workers: 8`; tune `max_open_files` vs ulimit |
@@ -179,18 +217,22 @@ CONFIG=configs/v100_h128_d1.yaml RESUME=runs/v100_h128_d1/last.ckpt bash cloud/r
 ## 10. One-page cheat sheet
 
 ```bash
-# env
+# --- BEFORE renting the 8 GPUs: stage 1000-domain subset (306 GB) into OBS from a cheap box ---
+python scripts/select_subset.py --n 1000 --max-gb 0.7 --out configs/subset_1000.txt
+BUCKET=obs://<your-bucket> bash cloud/obs_roundtrip_test.sh              # verify OBS access first
+BUCKET=obs://<your-bucket> SUBSET=configs/subset_1000.txt bash cloud/stage_to_obs.sh
+# --- then rent 8x V100, on the instance: ---
 TORCH_CUDA=cu118 bash cloud/setup_env.sh && conda activate deepjump
-# smoke first: ~15 domains, single GPU, 60 steps (measure peak mem + ms/step)
-python scripts/download_mdcath.py --root /data/mdcath --n 15 --max-gb 0.6
-python scripts/build_manifest.py --root /data/mdcath --out /data/mdcath/manifest.json
+BUCKET=obs://<your-bucket> bash cloud/sync_from_obs.sh          # OBS -> /data (no HF, no GPU waste)
+# 1-GPU smoke (peak mem + ms/step), then 8-GPU 100-step DDP smoke (sync/NCCL/mem/ckpt)
 python scripts/train_ddp.py --config configs/v100_smoke.yaml
-# then validation subset + formal run (8x V100, delta=1)
-MODE=subset N=1000 ROOT=/data/mdcath bash cloud/download_data.sh
-CONFIG=configs/v100_h128_d1.yaml bash cloud/run_ddp.sh
+CONFIG=configs/v100_ddp_smoke.yaml bash cloud/run_ddp.sh
+# then the bounded formal run (8x V100, delta=1) with ckpt archival to OBS
+RUN_DIR=runs/v100_paper_d1 BUCKET=obs://<your-bucket> bash cloud/ckpt_to_obs.sh &
+CONFIG=configs/v100_paper_d1.yaml bash cloud/run_ddp.sh
 # resume / evaluate
-CONFIG=configs/v100_h128_d1.yaml RESUME=runs/v100_h128_d1/last.ckpt bash cloud/run_ddp.sh
-python scripts/tica_eval.py --ckpt runs/v100_h128_d1/last.ckpt --gen conditional --K 8
+CONFIG=configs/v100_paper_d1.yaml RESUME=runs/v100_paper_d1/last.ckpt bash cloud/run_ddp.sh
+python scripts/tica_eval.py --ckpt runs/v100_paper_d1/last.ckpt --gen conditional --K 8
 ```
 
 Knobs to align/scale: `data.{root,manifest,temperatures,replicas,delta_frames,val_fraction}`,
