@@ -5,7 +5,7 @@
 # (2 * 8 * 8 = 128). TUNE batch_size/grad_accum to your GPU memory (all-atom loss @ crop 256
 # is memory-heavy; on 80 GB A100/A800 start with batch_size 2).
 data:
-  root: /data/mdcath                 # local NVMe (data synced from OBS); see cloud/HUAWEI_CLOUD_PLAN.md
+  root: /data/mdcath                 # local NVMe (data synced from OBS); see cloud/huawei/HUAWEI_CLOUD_PLAN.md
   manifest: /data/mdcath/manifest.json   # build once: python scripts/build_manifest.py --root /data/mdcath
   domains: []                        # [] => all domains in the manifest
   temperatures: [320, 348, 379, 413, 450]

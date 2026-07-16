@@ -1,5 +1,11 @@
 # Reproducing DeepJump on Huawei Cloud (near-paper scale) — Executable Plan
 
+> **Current execution note (2026-07-16):** Sections below retain historical sizing for the old
+> smallest-file 1000-domain subset. The active run uses the length-proportional subset at
+> `obs://deepjump-mdcath-cn4-ringochen/mdcath_length_proportional_1000/`: 1000 H5 files,
+> 668,131,379,559 H5 bytes, and a 2048 GiB EVS. Follow
+> [`cloud/huawei/GPU_BRINGUP_CHECKLIST.md`](GPU_BRINGUP_CHECKLIST.md) for the next 8×V100 start.
+
 > **Goal**: on Huawei Cloud NVIDIA GPUs, using this repo's `cloud-fullscale` branch, train a
 > near-paper-scale DeepJump (H=128, 5 temperatures × 5 replicas, ~500k-step recipe) and evaluate
 > it distributionally (TICA JSD).
@@ -51,9 +57,9 @@ Still out of scope: fast-folder headline numbers (JSD/ΔG/MFPT/ab-initio) — no
 | Manifest builder | `scripts/build_manifest.py` | scan once → `manifest.json`; instant training startup |
 | DDP trainer | `scripts/train_ddp.py` | torchrun/NCCL, DistributedSampler, AMP (fp16/bf16), grad-accum to target batch, warmup + linear LR decay, rank-0 val/log/checkpoint, `--resume` |
 | Shared loss/schedule | `src/deepjump/training.py` | pairwise + offset + 25 Å all-atom losses; `lr_at` |
-| Configs | `configs/v100_smoke.yaml` (1-GPU smoke), `configs/v100_ddp_smoke.yaml` (8-GPU 100-step smoke, same footprint as formal), `configs/v100_paper_d1.yaml` (**V100 formal**: crop 256, all-atom loss), `configs/v100_h128_d1.yaml` (crop-128/offset-loss fallback), `configs/paper_h128_d{1,10,100}.yaml` (A100 template) | ready to run |
+| Configs | `configs/v100_smoke.yaml` (1-GPU smoke), `configs/v100_ddp_smoke.yaml` (8-GPU 100-step smoke), `configs/v100_ddp_calibration.yaml` (8-GPU 1000-step bounded calibration), `configs/v100_paper_d1.yaml` (**V100 formal**: crop 256, all-atom loss), `configs/v100_h128_d1.yaml` (crop-128/offset-loss fallback), `configs/paper_h128_d{1,10,100}.yaml` (A100 template) | ready to run |
 | Frozen subset | `configs/subset_1000.txt` | reproducible 1000-domain id list (306 GB) so staging + manifest match exactly |
-| Cloud scripts | `cloud/{setup_env,download_data,run_ddp}.sh` + `cloud/{stage_to_obs,sync_from_obs,ckpt_to_obs}.sh` | env / data / launch + OBS staging & ckpt archival |
+| Cloud scripts | `cloud/huawei/{setup_env,download_data,run_ddp}.sh` + `cloud/huawei/{stage_to_obs,sync_from_obs,ckpt_to_obs}.sh` | env / data / launch + OBS staging & ckpt archival |
 
 ---
 
@@ -94,7 +100,7 @@ lsblk                                 # find the data disk (e.g. /dev/vdb)
 mkfs.ext4 /dev/vdb && mkdir -p /data && mount /dev/vdb /data
 # OBS access (install obsutil, configure AK/SK) — for data sync + checkpoint upload
 obsutil config -i=<AK> -k=<SK> -e=<obs-endpoint>
-BUCKET=obs://<your-bucket> bash cloud/obs_roundtrip_test.sh   # 2-file up/down sanity check
+BUCKET=obs://<your-bucket> bash cloud/huawei/obs_roundtrip_test.sh   # 2-file up/down sanity check
 ```
 
 ---
@@ -105,7 +111,7 @@ BUCKET=obs://<your-bucket> bash cloud/obs_roundtrip_test.sh   # 2-file up/down s
 git clone https://github.com/ringochen06/deepjump.git && cd deepjump
 git checkout cloud-fullscale
 # choose the CUDA wheel matching nvidia-smi's driver; V100 -> cu118 or cu121
-TORCH_CUDA=cu118 bash cloud/setup_env.sh && conda activate deepjump
+TORCH_CUDA=cu118 bash cloud/huawei/setup_env.sh && conda activate deepjump
 ```
 
 ---
@@ -121,16 +127,16 @@ instance only does an **intra-region `obsutil sync`** (fast, near-free, no HF).
 # 1. freeze the exact subset ids (already committed as configs/subset_1000.txt; re-run to refresh)
 python scripts/select_subset.py --n 1000 --max-gb 0.7 --out configs/subset_1000.txt   # 1000 doms, 306 GB
 # 2. HF download that subset -> build manifest -> upload both to OBS (obsutil configured with AK/SK)
-BUCKET=obs://<your-bucket> SUBSET=configs/subset_1000.txt bash cloud/stage_to_obs.sh
-#    (full dataset instead:  BUCKET=obs://<your-bucket> MODE=full bash cloud/stage_to_obs.sh)
+BUCKET=obs://<your-bucket> SUBSET=configs/subset_1000.txt bash cloud/huawei/stage_to_obs.sh
+#    (full dataset instead:  BUCKET=obs://<your-bucket> MODE=full bash cloud/huawei/stage_to_obs.sh)
 
 # --- (B) later, ON the 8-GPU instance, right after boot ---
-BUCKET=obs://<your-bucket> bash cloud/sync_from_obs.sh          # OBS -> /data (intra-region, no HF)
+BUCKET=obs://<your-bucket> bash cloud/huawei/sync_from_obs.sh          # OBS -> /data (intra-region, no HF)
 ```
 
 Fallback (skip OBS, download straight to the instance — burns GPU-hours, not recommended for 8-GPU):
 ```bash
-MODE=subset N=1000 ROOT=/data/mdcath bash cloud/download_data.sh
+MODE=subset N=1000 ROOT=/data/mdcath bash cloud/huawei/download_data.sh
 ```
 
 Once the manifest exists (staging builds it for you), training startup is instant (no per-file opens).
@@ -147,15 +153,15 @@ python scripts/train_ddp.py --config configs/v100_smoke.yaml     # direct python
 # STEP B - 8-GPU 100-step DDP SMOKE (~minutes): confirms all 8 ranks sync over NCCL, per-GPU
 # memory fits 16 GB, DistributedSampler shards the real 5-temp x 5-replica data, and a mid-run
 # checkpoint is written + rotated. Verify BEFORE committing to the long run. See checklist below.
-CONFIG=configs/v100_ddp_smoke.yaml bash cloud/run_ddp.sh
+CONFIG=configs/v100_ddp_smoke.yaml bash cloud/huawei/run_ddp.sh
 
 # STEP C - 8-GPU formal run (run_ddp.sh auto-uses all visible GPUs). Archive ckpts to OBS in bg.
-RUN_DIR=runs/v100_paper_d1 BUCKET=obs://<your-bucket> bash cloud/ckpt_to_obs.sh &
-CONFIG=configs/v100_paper_d1.yaml bash cloud/run_ddp.sh
+RUN_DIR=runs/v100_paper_d1 BUCKET=obs://<your-bucket> bash cloud/huawei/ckpt_to_obs.sh &
+CONFIG=configs/v100_paper_d1.yaml bash cloud/huawei/run_ddp.sh
 
 # resume (after preemption / restart): pull the ckpt dir back from OBS, then --resume
 obsutil sync obs://<your-bucket>/ckpts/v100_paper_d1 runs/v100_paper_d1
-CONFIG=configs/v100_paper_d1.yaml RESUME=runs/v100_paper_d1/last.ckpt bash cloud/run_ddp.sh
+CONFIG=configs/v100_paper_d1.yaml RESUME=runs/v100_paper_d1/last.ckpt bash cloud/huawei/run_ddp.sh
 ```
 
 **STEP B (100-step DDP smoke) — what to confirm before the long run** (same crop 256 / batch 16 /
@@ -176,7 +182,7 @@ all-atom footprint as the formal run, so its peak-memory reading is the real one
   mark) and `data %` (dataloader-wait fraction), and writes `runs/.../history.json` (honest τ=0 val +
   no-op baseline). Optional: `tensorboard --logdir runs/`.
 - **Checkpoints**: every `ckpt_every` steps → `ckpt_<step>.pt` + `last.ckpt` (model+optimizer+step,
-  written atomically via `.tmp` + `os.replace`), keeping the last `keep_last_k`. `cloud/ckpt_to_obs.sh`
+  written atomically via `.tmp` + `os.replace`), keeping the last `keep_last_k`. `cloud/huawei/ckpt_to_obs.sh`
   syncs them to OBS every 10 min so a reclaimed instance doesn't lose progress.
 
 ---
@@ -219,19 +225,19 @@ all-atom footprint as the formal run, so its peak-memory reading is the real one
 ```bash
 # --- BEFORE renting the 8 GPUs: stage 1000-domain subset (306 GB) into OBS from a cheap box ---
 python scripts/select_subset.py --n 1000 --max-gb 0.7 --out configs/subset_1000.txt
-BUCKET=obs://<your-bucket> bash cloud/obs_roundtrip_test.sh              # verify OBS access first
-BUCKET=obs://<your-bucket> SUBSET=configs/subset_1000.txt bash cloud/stage_to_obs.sh
+BUCKET=obs://<your-bucket> bash cloud/huawei/obs_roundtrip_test.sh              # verify OBS access first
+BUCKET=obs://<your-bucket> SUBSET=configs/subset_1000.txt bash cloud/huawei/stage_to_obs.sh
 # --- then rent 8x V100, on the instance: ---
-TORCH_CUDA=cu118 bash cloud/setup_env.sh && conda activate deepjump
-BUCKET=obs://<your-bucket> bash cloud/sync_from_obs.sh          # OBS -> /data (no HF, no GPU waste)
+TORCH_CUDA=cu118 bash cloud/huawei/setup_env.sh && conda activate deepjump
+BUCKET=obs://<your-bucket> bash cloud/huawei/sync_from_obs.sh          # OBS -> /data (no HF, no GPU waste)
 # 1-GPU smoke (peak mem + ms/step), then 8-GPU 100-step DDP smoke (sync/NCCL/mem/ckpt)
 python scripts/train_ddp.py --config configs/v100_smoke.yaml
-CONFIG=configs/v100_ddp_smoke.yaml bash cloud/run_ddp.sh
+CONFIG=configs/v100_ddp_smoke.yaml bash cloud/huawei/run_ddp.sh
 # then the bounded formal run (8x V100, delta=1) with ckpt archival to OBS
-RUN_DIR=runs/v100_paper_d1 BUCKET=obs://<your-bucket> bash cloud/ckpt_to_obs.sh &
-CONFIG=configs/v100_paper_d1.yaml bash cloud/run_ddp.sh
+RUN_DIR=runs/v100_paper_d1 BUCKET=obs://<your-bucket> bash cloud/huawei/ckpt_to_obs.sh &
+CONFIG=configs/v100_paper_d1.yaml bash cloud/huawei/run_ddp.sh
 # resume / evaluate
-CONFIG=configs/v100_paper_d1.yaml RESUME=runs/v100_paper_d1/last.ckpt bash cloud/run_ddp.sh
+CONFIG=configs/v100_paper_d1.yaml RESUME=runs/v100_paper_d1/last.ckpt bash cloud/huawei/run_ddp.sh
 python scripts/tica_eval.py --ckpt runs/v100_paper_d1/last.ckpt --gen conditional --K 8
 ```
 

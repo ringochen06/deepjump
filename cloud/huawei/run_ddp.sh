@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Launch DDP training on one node with all visible GPUs.
 #
-#   CONFIG=configs/paper_h128_d1.yaml ./cloud/run_ddp.sh
-#   CONFIG=configs/paper_h128_d1.yaml RESUME=runs/paper_h128_d1/last.ckpt ./cloud/run_ddp.sh
+#   CONFIG=configs/paper_h128_d1.yaml ./cloud/huawei/run_ddp.sh
+#   CONFIG=configs/paper_h128_d1.yaml RESUME=runs/paper_h128_d1/last.ckpt ./cloud/huawei/run_ddp.sh
 #
 # Multi-node: set NNODES, NODE_RANK, MASTER_ADDR, MASTER_PORT and run on each node.
 set -euo pipefail
