@@ -3,7 +3,7 @@
 # peak-GPU reading is exactly the formal run's; ONLY max_steps/val_every/ckpt_every are shortened.
 # Purpose: on the freshly rented 8-GPU instance, confirm in ~minutes that (a) all 8 ranks sync via
 # NCCL, (b) per-GPU memory fits 16 GB, (c) DistributedSampler shards the real 5-temp x 5-replica
-# data, (d) a checkpoint is written mid-run. Launch: CONFIG=configs/v100_ddp_smoke.yaml bash cloud/run_ddp.sh
+# data, (d) a checkpoint is written mid-run. Launch: CONFIG=configs/v100_ddp_smoke.yaml bash cloud/huawei/run_ddp.sh
 data:
   root: /data/mdcath
   manifest: /data/mdcath/manifest.json

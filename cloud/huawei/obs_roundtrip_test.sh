@@ -3,8 +3,8 @@
 # equality. Run this BEFORE the 306 GB stage_to_obs.sh so a mis-configured bucket/AK-SK/region
 # fails in seconds, not after a long transfer.
 #
-#   BUCKET=obs://my-mdcath bash cloud/obs_roundtrip_test.sh
-#   CLEANUP=1 BUCKET=obs://my-mdcath bash cloud/obs_roundtrip_test.sh   # also remove the test objects
+#   BUCKET=obs://my-mdcath bash cloud/huawei/obs_roundtrip_test.sh
+#   CLEANUP=1 BUCKET=obs://my-mdcath bash cloud/huawei/obs_roundtrip_test.sh   # also remove the test objects
 set -euo pipefail
 
 BUCKET=${BUCKET:?set BUCKET=obs://your-bucket-name}

@@ -20,7 +20,7 @@ Two strategies:
     python scripts/select_subset.py --strategy length-proportional \
         --seed 20260715 --out configs/subset_1000_length_proportional.txt
 
-Then stage exactly that list (see cloud/stage_to_obs.sh):
+Then stage exactly that list (see cloud/huawei/stage_to_obs.sh):
     python scripts/download_mdcath.py --root /data/mdcath --domains-file <list>
 """
 

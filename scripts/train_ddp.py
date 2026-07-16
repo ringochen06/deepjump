@@ -109,7 +109,7 @@ def evaluate(model, loader, device, cfg, amp_dtype, max_batches=30):
 
 def save_ckpt(path, core, opt, step, cfg):
     # Write atomically: torch.save to a temp file in the same dir, then os.replace (atomic on
-    # POSIX). A concurrent reader (e.g. cloud/ckpt_to_obs.sh syncing to OBS) then always sees a
+    # POSIX). A concurrent reader (e.g. cloud/huawei/ckpt_to_obs.sh syncing to OBS) then always sees a
     # complete file -- old or new, never a half-written last.ckpt.
     path = Path(path)
     tmp = path.with_name(path.name + ".tmp")

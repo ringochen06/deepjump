@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Fetch mdCATH to local NVMe (/data/mdcath) and build the manifest.
 #
-#   MODE=subset N=1000 ./cloud/download_data.sh     # 1000 smallest domains (validation run)
-#   MODE=full            ./cloud/download_data.sh     # full ~5398 domains (~2-3 TB)
+#   MODE=subset N=1000 ./cloud/huawei/download_data.sh     # 1000 smallest domains (validation run)
+#   MODE=full            ./cloud/huawei/download_data.sh     # full ~5398 domains (~2-3 TB)
 #
 # On Huawei Cloud, prefer: keep the raw dataset in OBS (cheap, durable) and sync the
 # working subset to the instance's local NVMe SSD (fast random reads for the dataloader).

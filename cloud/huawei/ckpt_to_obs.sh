@@ -3,7 +3,7 @@
 # progress. Run in the background alongside training; --resume from the synced ckpt after a
 # restart. GPU-hours are the expensive resource -- OBS storage is cheap insurance.
 #
-#   RUN_DIR=runs/v100_paper_d1 BUCKET=obs://my-mdcath bash cloud/ckpt_to_obs.sh &
+#   RUN_DIR=runs/v100_paper_d1 BUCKET=obs://my-mdcath bash cloud/huawei/ckpt_to_obs.sh &
 #
 # After a restart, pull the latest back:
 #   obsutil sync obs://my-mdcath/ckpts/v100_paper_d1 runs/v100_paper_d1

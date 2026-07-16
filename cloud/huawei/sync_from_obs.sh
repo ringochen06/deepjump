@@ -4,10 +4,10 @@
 # effectively free, and it does NOT touch HuggingFace, so no GPU-hours are burned on a slow
 # public download. Run this right after the instance boots, before training.
 #
-#   BUCKET=obs://my-mdcath bash cloud/sync_from_obs.sh
+#   BUCKET=obs://my-mdcath bash cloud/huawei/sync_from_obs.sh
 #
 # Prereq: obsutil configured on the instance (obsutil config -i=AK -k=SK -e=<endpoint>).
-# Validate access first:  BUCKET=obs://my-mdcath bash cloud/obs_roundtrip_test.sh
+# Validate access first:  BUCKET=obs://my-mdcath bash cloud/huawei/obs_roundtrip_test.sh
 set -euo pipefail
 
 BUCKET=${BUCKET:?set BUCKET=obs://your-bucket-name}
@@ -30,3 +30,24 @@ fi
 nfiles=$(find "$ROOT" -name 'mdcath_dataset_*.h5' | wc -l | tr -d ' ')
 echo ">> ready. $nfiles h5 files on disk."
 echo "   Point config data.root=$ROOT data.manifest=$ROOT/manifest.json"
+
+# Optional strict gate for a frozen subset. The caller supplies independently recorded
+# expectations; staging metadata alone is not trusted as the source of truth.
+if [ -n "${EXPECTED_H5:-}" ] || [ -n "${EXPECTED_BYTES:-}" ] || [ -n "${EXPECTED_SUBSET_SHA256:-}" ]; then
+  : "${EXPECTED_H5:?set EXPECTED_H5 for strict audit}"
+  : "${EXPECTED_BYTES:?set EXPECTED_BYTES for strict audit}"
+  : "${EXPECTED_SUBSET_SHA256:?set EXPECTED_SUBSET_SHA256 for strict audit}"
+  echo ">> strict local data audit"
+  AUDIT_ARGS=(
+    --root "$ROOT"
+    --expected-h5 "$EXPECTED_H5"
+    --expected-bytes "$EXPECTED_BYTES"
+    --expected-subset-sha256 "$EXPECTED_SUBSET_SHA256"
+    --samples "${AUDIT_SAMPLES:-5}"
+  )
+  [ -n "${EXPECTED_TRAJECTORIES:-}" ] && AUDIT_ARGS+=(--expected-trajectories "$EXPECTED_TRAJECTORIES")
+  [ -n "${EXPECTED_STRATEGY:-}" ] && AUDIT_ARGS+=(--expected-strategy "$EXPECTED_STRATEGY")
+  [ -n "${EXPECTED_SEED:-}" ] && AUDIT_ARGS+=(--expected-seed "$EXPECTED_SEED")
+  [ -n "${EXPECTED_COMMIT:-}" ] && AUDIT_ARGS+=(--expected-commit "$EXPECTED_COMMIT")
+  python scripts/audit_mdcath_staging.py "${AUDIT_ARGS[@]}"
+fi
