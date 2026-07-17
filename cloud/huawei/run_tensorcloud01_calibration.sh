@@ -117,7 +117,16 @@ nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
 "$PYTHON" -c 'import torch; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 8; print(torch.__version__, torch.version.cuda, torch.cuda.device_count())'
 
 printf 'gate=tests start=%s\n' "$(date -Is)"
-"$PYTHON" -m pytest -q | tee "$RUN_DIR/pytest.log"
+timeout --signal=TERM --kill-after=30s 8m \
+  "$PYTHON" -m pytest -q \
+  tests/test_tensor_cloud01.py \
+  tests/test_cloud_configs.py \
+  tests/test_training_gates.py \
+  tests/test_select_calibration_checkpoints.py \
+  tests/test_scientific_evaluation_gate.py \
+  tests/test_transition_robustness_eval.py \
+  tests/test_audit_mdcath_staging.py \
+  2>&1 | tee "$RUN_DIR/pytest.log"
 
 printf 'gate=data_audit start=%s\n' "$(date -Is)"
 "$PYTHON" scripts/audit_mdcath_staging.py \

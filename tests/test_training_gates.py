@@ -192,6 +192,12 @@ def test_tensorcloud01_calibration_runner_is_bounded_and_delta_scoped():
     assert 'sudo -n shutdown -h now' in runner
     assert '[[ "$code" != 0 ]] || code=$shutdown_code' in runner
     assert 'scripts/train_ddp.py --config "$CONFIG"' in runner
+    assert 'timeout --signal=TERM --kill-after=30s 8m' in runner
+    assert 'tests/test_tensor_cloud01.py' in runner
+    assert 'tests/test_audit_mdcath_staging.py' in runner
+    assert 'tests/test_ddp_sync.py' not in runner
+    assert 'tests/test_worker_crop_rng.py' not in runner
+    assert '"$PYTHON" -m pytest -q |' not in runner
     assert "--warm-start" not in runner
     assert "formal training was not started" in runner
     assert "v100_tensorcloud01_vector_only_d1_calibration.yaml" in runner
