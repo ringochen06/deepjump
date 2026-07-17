@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -16,64 +17,12 @@ from torch.utils.data import DataLoader
 
 from deepjump.config import load_config, to_dict
 from deepjump.data import MdcathPairDataset, collate_pairs, discover_domains
-from deepjump.losses import (
-    allatom_pairwise_huber_loss,
-    heavy_atom_offset_loss,
-    pairwise_vector_huber_loss,
-)
+from deepjump.losses import pairwise_vector_huber_loss
 from deepjump.metrics import masked_ca_rmsd
 from deepjump.model import DeepJumpLite
 from deepjump.model.deepjump import count_parameters
+from deepjump.training import total_loss
 from deepjump.utils import move_batch, resolve_device, split_domains
-
-
-def _step_loss(P_hat, V_hat, P_gt, V_gt, batch, cfg):
-    ca = pairwise_vector_huber_loss(P_hat, P_gt, batch["residue_mask"], cfg.train.huber_delta)
-    loss = ca
-    off_val = None
-    if cfg.train.w_offset > 0 and V_hat is not None:
-        off = heavy_atom_offset_loss(V_hat, V_gt, batch["atom_mask"], cfg.train.huber_delta)
-        loss = ca + cfg.train.w_offset * off
-        off_val = off.item()
-    if cfg.train.w_allatom > 0 and V_hat is not None:
-        aa = allatom_pairwise_huber_loss(
-            P_hat, V_hat, P_gt, V_gt, batch["atom_mask"], batch["residue_mask"],
-            cutoff=cfg.model.dist_cutoff, delta=cfg.train.huber_delta,
-        )
-        loss = loss + cfg.train.w_allatom * aa
-    return loss, ca.item(), off_val
-
-
-def total_loss(out, batch, cfg, model=None):
-    """Step-1 loss; if unroll>1 and w_unroll>0, add self-conditioned step-2..K losses.
-
-    Each extra step re-runs the model on its OWN (detached) previous prediction as the new
-    X_t and supervises toward X_{t+kδ} — training the model to continue from imperfect
-    inputs, which is exactly the rollout failure mode. Generalises to K steps.
-    """
-    loss1, ca1, off1 = _step_loss(
-        out["P_hat_1"], out.get("V_hat_1"), batch["P_1"], batch["V_1"], batch, cfg
-    )
-    loss, comps = loss1, {"ca": ca1}
-    if off1 is not None:
-        comps["offset"] = off1
-
-    if cfg.train.w_unroll > 0 and model is not None and out.get("V_hat_1") is not None:
-        P_prev, V_prev = out["P_hat_1"].detach(), out["V_hat_1"].detach()
-        k = 2
-        while f"P_{k}" in batch:
-            batch_k = {**batch, "P_t": P_prev, "V_t": V_prev,
-                       "P_1": batch[f"P_{k}"], "V_1": batch[f"V_{k}"]}
-            out_k = model(batch_k)
-            loss_k, ca_k, _ = _step_loss(
-                out_k["P_hat_1"], out_k.get("V_hat_1"),
-                batch[f"P_{k}"], batch[f"V_{k}"], batch, cfg
-            )
-            loss = loss + cfg.train.w_unroll * loss_k
-            comps[f"ca{k}"] = ca_k
-            P_prev, V_prev = out_k["P_hat_1"].detach(), out_k["V_hat_1"].detach()
-            k += 1
-    return loss, comps
 
 
 def build_loaders(cfg):
@@ -135,13 +84,59 @@ def evaluate(model, loader, device, cfg, max_batches=20):
     }
 
 
+@torch.no_grad()
+def fast_dev_metrics(model, batch, cfg):
+    """Measure the one-batch gate at the honest generative endpoint (tau=0)."""
+    tau0 = torch.zeros(batch["P_t"].shape[0], device=batch["P_t"].device)
+    out = model(batch, tau=tau0)
+    loss, _ = total_loss(out, batch, cfg, model)
+    rmsd = masked_ca_rmsd(
+        out["P_hat_1"], batch["P_1"], batch["residue_mask"]
+    ).mean()
+    return {"loss": loss.item(), "rmsd": rmsd.item()}
+
+
+def fast_dev_gate_errors(report, max_loss_ratio=None, max_rmsd_ratio=None):
+    """Return fail-closed reasons for a machine-readable fast-dev report."""
+    errors = []
+    for phase in ("initial", "final"):
+        for metric in ("loss", "rmsd"):
+            value = report[phase][metric]
+            if not math.isfinite(value):
+                errors.append(f"{phase} {metric} is non-finite: {value}")
+    if errors:
+        return errors
+    if max_loss_ratio is not None and report["loss_ratio"] > max_loss_ratio:
+        errors.append(
+            f"loss ratio {report['loss_ratio']:.6g} exceeds {max_loss_ratio:.6g}"
+        )
+    if max_rmsd_ratio is not None and report["rmsd_ratio"] > max_rmsd_ratio:
+        errors.append(
+            f"RMSD ratio {report['rmsd_ratio']:.6g} exceeds {max_rmsd_ratio:.6g}"
+        )
+    return errors
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--fast-dev", action="store_true", help="overfit a single batch")
+    ap.add_argument(
+        "--fast-dev-max-loss-ratio", type=float, default=None,
+        help="with --fast-dev, fail unless final tau=0 loss / initial loss is at most this",
+    )
+    ap.add_argument(
+        "--fast-dev-max-rmsd-ratio", type=float, default=None,
+        help="with --fast-dev, fail unless final tau=0 RMSD / initial RMSD is at most this",
+    )
     ap.add_argument("--max-steps", type=int, default=None, help="override train.max_steps")
     ap.add_argument("--lr", type=float, default=None, help="override train.lr")
     args = ap.parse_args()
+    if not args.fast_dev and (
+        args.fast_dev_max_loss_ratio is not None
+        or args.fast_dev_max_rmsd_ratio is not None
+    ):
+        ap.error("fast-dev thresholds require --fast-dev")
 
     cfg = load_config(args.config)
     if args.max_steps is not None:
@@ -171,16 +166,50 @@ def main():
         # Sanity: a single batch, no noise -> loss must collapse toward 0.
         model.noise_sigma = 0.0
         batch = move_batch(next(iter(train_loader)), device)
-        print("fast-dev: overfitting one batch (expect loss -> ~0)")
-        for step in range(300):
+        initial = fast_dev_metrics(model, batch, cfg)
+        print(
+            "fast-dev: overfitting one batch "
+            f"(initial tau=0 loss={initial['loss']:.6f}, rmsd={initial['rmsd']:.6f})"
+        )
+        for step in range(cfg.train.max_steps):
             out = model(batch, tau=torch.rand(batch["P_t"].shape[0], device=device))
             loss, _ = total_loss(out, batch, cfg, model)
+            if not torch.isfinite(loss):
+                raise RuntimeError(f"fast-dev loss became non-finite at step {step}: {loss}")
             opt.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.train.grad_clip)
             opt.step()
-            if step % 50 == 0 or step == 299:
+            if step % cfg.train.log_every == 0 or step == cfg.train.max_steps - 1:
                 rmsd = masked_ca_rmsd(out["P_hat_1"], batch["P_1"], batch["residue_mask"]).mean().item()
                 print(f"  step {step:4d}  loss {loss.item():.4f}  rmsd {rmsd:.3f}")
+        final = fast_dev_metrics(model, batch, cfg)
+        loss_ratio = final["loss"] / initial["loss"] if initial["loss"] > 0 else math.inf
+        rmsd_ratio = final["rmsd"] / initial["rmsd"] if initial["rmsd"] > 0 else math.inf
+        report = {
+            "status": "PENDING",
+            "steps": cfg.train.max_steps,
+            "evaluation_tau": 0.0,
+            "initial": initial,
+            "final": final,
+            "loss_ratio": loss_ratio,
+            "rmsd_ratio": rmsd_ratio,
+            "thresholds": {
+                "max_loss_ratio": args.fast_dev_max_loss_ratio,
+                "max_rmsd_ratio": args.fast_dev_max_rmsd_ratio,
+            },
+        }
+        errors = fast_dev_gate_errors(
+            report, args.fast_dev_max_loss_ratio, args.fast_dev_max_rmsd_ratio
+        )
+        report["status"] = "PASS" if not errors else "FAIL"
+        report["errors"] = errors
+        (out_dir / "fast_dev.json").write_text(json.dumps(report, indent=2))
+        print(
+            f"fast-dev {report['status']}: final tau=0 loss={final['loss']:.6f} "
+            f"({loss_ratio:.4f}x), rmsd={final['rmsd']:.6f} ({rmsd_ratio:.4f}x)"
+        )
+        if errors:
+            raise SystemExit("fast-dev gate failed: " + "; ".join(errors))
         return
 
     step = 0

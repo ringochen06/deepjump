@@ -42,6 +42,16 @@ def test_layout_shapes_and_mask():
     # GLY has 0 sidechain -> 3 heavy (N,C,O); ALA -> 4; TRP -> 13
     assert layout.atom_mask.sum(axis=1).tolist() == [3, 4, 13]
     assert layout.atom_mask.shape == (3, MAX_HEAVY)
+    assert layout.bond_mask.tolist() == [True, True]
+
+
+def test_layout_bond_mask_tracks_raw_residue_gaps_not_residue_types():
+    names, resids, resnames = _toy_topology()
+    resids = resids.copy()
+    resids[resids == 2] = 5
+    layout = build_layout(names, resids, resnames)
+    assert layout.res_index.tolist() != [0, 1, 2]
+    assert layout.bond_mask.tolist() == [True, False]
 
 
 def test_pair_distance_invariant_and_offsets_covariant():

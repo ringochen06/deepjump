@@ -23,7 +23,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, get_worker_info
 
 from ..atom_constants import RESIDUE_ALIASES, RESIDUE_TO_INDEX
 from ..representation import (
@@ -161,7 +161,9 @@ class MdcathPairDataset(Dataset):
         self.unroll = int(unroll)  # number of future steps to return (>=1)
         self.canon_symmetric = canon_symmetric
         self.max_open_files = int(max_open_files)
-        self.rng = np.random.default_rng(seed)
+        self.seed = int(seed)
+        self.rng = np.random.default_rng(self.seed)
+        self._rng_worker_id: int | None = None
         self._cache: dict[int, _DomainHandle] = {}  # per-worker lazy handle cache
         self._order: list[int] = []  # LRU order of file indices
 
@@ -207,6 +209,7 @@ class MdcathPairDataset(Dataset):
         state = self.__dict__.copy()
         state["_cache"] = {}
         state["_order"] = []
+        state["_rng_worker_id"] = None
         return state
 
     def __setstate__(self, state):
@@ -229,16 +232,44 @@ class MdcathPairDataset(Dataset):
     def __len__(self) -> int:
         return self._total
 
+    def stratified_indices(self, samples_per_trajectory: int = 1, seed: int = 0) -> list[int]:
+        """Return fixed, trajectory-balanced sample indices.
+
+        Sequential dataset indices exhaust one trajectory before moving to the
+        next.  Taking the first N validation batches therefore evaluates almost
+        exclusively on the first domain/temperature/replica.  This helper draws
+        the same number of frames from every available trajectory instead.
+        """
+        if samples_per_trajectory < 1:
+            raise ValueError("samples_per_trajectory must be >= 1")
+        rng = np.random.default_rng(seed)
+        out: list[int] = []
+        start = 0
+        for stop in self._cum:
+            count = int(stop) - start
+            take = min(samples_per_trajectory, count)
+            offsets = rng.choice(count, size=take, replace=False)
+            out.extend(start + int(offset) for offset in sorted(offsets.tolist()))
+            start = int(stop)
+        return out
+
     def _crop(self, n_res: int) -> slice:
         if n_res <= self.crop_length:
             return slice(0, n_res)
+        worker = get_worker_info()
+        if worker is not None and self._rng_worker_id != worker.id:
+            # Dataset objects are copied into workers after construction. Without
+            # a worker-specific seed, every worker inherits the same NumPy RNG
+            # state and emits pairwise-identical crop starts.
+            self.rng = np.random.default_rng(worker.seed)
+            self._rng_worker_id = worker.id
         start = int(self.rng.integers(0, n_res - self.crop_length + 1))
         return slice(start, start + self.crop_length)
 
     def __getitem__(self, i: int) -> dict:
         j = int(np.searchsorted(self._cum, i, side="right"))
         base = int(self._cum[j - 1]) if j > 0 else 0
-        t = i - base
+        t = int(i) - base
         fi, temp, rep, delta = self._traj[j]
         h = self._get_handle(fi)
         layout = h.layout
@@ -270,7 +301,12 @@ class MdcathPairDataset(Dataset):
             "P_t": P_t[sl], "V_t": V_t[sl],
             "P_1": futures[0][0][sl], "V_1": futures[0][1][sl],
             "res_index": res_index[sl], "atom_mask": atom_mask[sl],
+            "bond_mask": torch.as_tensor(layout.bond_mask[sl.start:sl.stop - 1], dtype=torch.bool),
             "delta_ns": torch.tensor(float(delta), dtype=torch.float32),  # 1 frame == 1 ns
+            "temperature": torch.tensor(temp, dtype=torch.long),
+            "replica": torch.tensor(rep, dtype=torch.long),
+            "start_frame": torch.tensor(t, dtype=torch.long),
+            "residue_start": torch.tensor(sl.start, dtype=torch.long),
             "n_res": (sl.stop - sl.start), "domain": h.name,
         }
         for k in range(2, self.unroll + 1):
@@ -301,7 +337,12 @@ def collate_pairs(batch: list[dict]) -> dict:
     res_index = torch.zeros(B, Nmax, dtype=torch.long)
     atom_mask = torch.zeros(B, Nmax, MAX_HEAVY, dtype=torch.bool)
     residue_mask = torch.zeros(B, Nmax, dtype=torch.bool)
+    bond_mask = torch.zeros(B, max(Nmax - 1, 0), dtype=torch.bool)
     delta_ns = torch.zeros(B, dtype=torch.float32)
+    temperature = torch.zeros(B, dtype=torch.long)
+    replica = torch.zeros(B, dtype=torch.long)
+    start_frame = torch.zeros(B, dtype=torch.long)
+    residue_start = torch.zeros(B, dtype=torch.long)
 
     for b, item in enumerate(batch):
         n = item["n_res"]
@@ -310,11 +351,19 @@ def collate_pairs(batch: list[dict]) -> dict:
         res_index[b, :n] = item["res_index"]
         atom_mask[b, :n] = item["atom_mask"]
         residue_mask[b, :n] = True
+        if n > 1:
+            bond_mask[b, :n - 1] = item["bond_mask"]
         delta_ns[b] = item["delta_ns"]
+        temperature[b] = item["temperature"]
+        replica[b] = item["replica"]
+        start_frame[b] = item["start_frame"]
+        residue_start[b] = item["residue_start"]
 
     out.update({
         "res_index": res_index, "atom_mask": atom_mask,
-        "residue_mask": residue_mask, "delta_ns": delta_ns,
+        "residue_mask": residue_mask, "bond_mask": bond_mask, "delta_ns": delta_ns,
+        "temperature": temperature, "replica": replica, "start_frame": start_frame,
+        "residue_start": residue_start,
         "domains": [item["domain"] for item in batch],
     })
     return out

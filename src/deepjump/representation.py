@@ -34,6 +34,7 @@ class AtomLayout:
     heavy_index: np.ndarray  # [N, 13] int -> atom index per slot (0 where missing)
     atom_mask: np.ndarray  # [N, 13] bool -> True where a real heavy atom exists
     res_index: np.ndarray  # [N] int -> residue type id (0..20)
+    bond_mask: np.ndarray  # [N-1] bool -> true consecutive residues in the topology
     num_residues: int
 
 
@@ -89,7 +90,11 @@ def build_layout(atom_names, resids, resnames) -> AtomLayout:
         missing = np.where(ca_index < 0)[0]
         raise ValueError(f"{len(missing)} residues have no CA atom (idx {missing[:5]}...)")
 
-    return AtomLayout(ca_index, heavy_index, atom_mask, res_index, N)
+    # `res_index` above is an amino-acid TYPE id and must never be used to infer
+    # topology.  Preserve the raw residue numbering separately as an adjacency
+    # mask so sequence gaps are excluded from local backbone losses/metrics.
+    bond_mask = np.asarray(ordered_resid[1:] == ordered_resid[:-1] + 1, dtype=bool)
+    return AtomLayout(ca_index, heavy_index, atom_mask, res_index, bond_mask, N)
 
 
 def apply_layout(coords, layout: AtomLayout):
