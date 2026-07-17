@@ -149,6 +149,9 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     tensorcloud01_fp32 = load_config("configs/v100_tensorcloud01_fp32_lr5e3_probe.yaml")
     tensorcloud01_warmup = load_config("configs/v100_tensorcloud01_fp16_warmup20_probe.yaml")
     tensorcloud01_lowlr = load_config("configs/v100_tensorcloud01_fp16_lr5e4_probe.yaml")
+    tensorcloud01_vector_only = load_config(
+        "configs/v100_tensorcloud01_vector_only_d1_calibration.yaml"
+    )
     assert paperstyle.data.unroll == 1
     assert paperstyle.model.source_noise_v
     assert paperstyle.model.vector_qk and paperstyle.model.paper_ff
@@ -190,6 +193,18 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     assert not tensorcloud01_smoke.model.vector_qk
     assert not tensorcloud01_smoke.model.tensor_qkv
     assert not tensorcloud01_smoke.model.paper_ff
+    assert tensorcloud01_vector_only.model.tensor_cloud01
+    assert tensorcloud01_vector_only.model.tensor_cloud01_vector_only_attention
+    assert tensorcloud01_vector_only.model.hidden == 128
+    assert tensorcloud01_vector_only.model.vector_channels == 128
+    assert tensorcloud01_vector_only.data.delta_frames == 1
+    assert tensorcloud01_vector_only.train.max_steps == 1000
+    assert (
+        tensorcloud01_vector_only.train.batch_size
+        * 8
+        * tensorcloud01_vector_only.train.grad_accum
+        == 128
+    )
     assert tensorcloud01_smoke.train.max_steps == 30
     assert tensorcloud01_smoke.train.warmup_steps == 20
     assert tensorcloud01_smoke.train.val_every == 30
@@ -217,6 +232,18 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
         load_config("configs/v100_tensorcloud01_d10_calibration.yaml"),
         load_config("configs/v100_tensorcloud01_d100_calibration.yaml"),
     ]
+    full_d1 = calibrations[0]
+    assert asdict(tensorcloud01_vector_only.data) == asdict(full_d1.data)
+    vector_model = asdict(tensorcloud01_vector_only.model)
+    full_model = asdict(full_d1.model)
+    assert vector_model.pop("tensor_cloud01_vector_only_attention")
+    assert not full_model.pop("tensor_cloud01_vector_only_attention")
+    assert vector_model == full_model
+    vector_train = asdict(tensorcloud01_vector_only.train)
+    full_train = asdict(full_d1.train)
+    vector_train.pop("out_dir")
+    full_train.pop("out_dir")
+    assert vector_train == full_train
     for calibration, expected_delta in zip(calibrations, (1, 10, 100), strict=True):
         calibration_data = asdict(calibration.data)
         smoke_data = asdict(tensorcloud01_smoke.data)

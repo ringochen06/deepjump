@@ -62,6 +62,33 @@ def test_attention_uses_literal_k_i_dot_q_j_without_scaling():
     assert torch.equal(attention._content_logits(scalar, vector), expected)
 
 
+def test_vector_only_attention_ignores_scalar_content_and_has_no_scalar_projection():
+    torch.manual_seed(4)
+    attention = TensorCloud01Attention(
+        hidden=8, num_heads=2, vector_only=True
+    )
+    assert not hasattr(attention, "to_qkv_scalar")
+    assert not hasattr(attention, "out_scalar")
+
+    scalar_a = torch.randn(1, 4, 8)
+    scalar_b = torch.randn(1, 4, 8) * 100
+    vector = torch.randn(1, 4, 8, 3, requires_grad=True)
+    positions = torch.randn(1, 4, 3)
+    mask = torch.ones(1, 4, dtype=torch.bool)
+
+    logits_a = attention._content_logits(scalar_a, vector)
+    logits_b = attention._content_logits(scalar_b, vector)
+    assert torch.equal(logits_a, logits_b)
+    scalar_out, vector_out = attention(scalar_a, vector, positions, mask)
+    assert torch.equal(scalar_out, torch.zeros_like(scalar_a))
+    assert torch.isfinite(vector_out).all()
+
+    vector_out.square().mean().backward()
+    for name, parameter in attention.named_parameters():
+        assert parameter.grad is not None, name
+        assert torch.isfinite(parameter.grad).all(), name
+
+
 def test_tensor_cloud01_rotation_translation_mask_and_gradients():
     torch.manual_seed(5)
     block = TensorCloud01Block(8, 2, 4, 4, 10.0)
@@ -113,6 +140,8 @@ def test_feedforward_equal_multiplicity_and_model_config_fail_closed():
         DeepJumpLite(ModelConfig(
             hidden=8, vector_channels=8, tensor_cloud01=True, tensor_qkv=True
         ))
+    with pytest.raises(ValueError, match="requires tensor_cloud01"):
+        DeepJumpLite(ModelConfig(tensor_cloud01_vector_only_attention=True))
 
     model = DeepJumpLite(ModelConfig(
         hidden=8, vector_channels=8, num_heads=2,
@@ -167,6 +196,57 @@ def test_tensor_cloud01_full_model_forward_backward_and_parameter_scaling():
         ), predict_heavy=True)
         counts.append(count_parameters(scaled))
     assert counts == [315_936, 1_225_952, 4_840_032]
+
+
+def test_tensor_cloud01_vector_only_parameter_scaling_and_checkpoint_isolation():
+    counts = []
+    for hidden in (32, 64, 128):
+        scaled = DeepJumpLite(ModelConfig(
+            hidden=hidden, vector_channels=hidden, num_heads=4,
+            cond_layers=6, transport_layers=6,
+            predict_heavy=True, tensor_cloud01=True,
+            tensor_cloud01_vector_only_attention=True,
+        ), predict_heavy=True)
+        counts.append(count_parameters(scaled))
+    assert counts == [262_944, 1_021_664, 4_038_240]
+
+    common = dict(
+        hidden=8, vector_channels=8, num_heads=2,
+        cond_layers=1, transport_layers=1,
+        predict_heavy=True, tensor_cloud01=True,
+    )
+    full_tensor = DeepJumpLite(ModelConfig(**common), predict_heavy=True)
+    vector_only = DeepJumpLite(ModelConfig(
+        **common, tensor_cloud01_vector_only_attention=True
+    ), predict_heavy=True)
+
+    batch, residues = 2, 4
+    data = {
+        "P_t": torch.randn(batch, residues, 3),
+        "V_t": torch.randn(batch, residues, 13, 3),
+        "P_1": torch.randn(batch, residues, 3),
+        "V_1": torch.randn(batch, residues, 13, 3),
+        "res_index": torch.randint(0, 20, (batch, residues)),
+        "delta_ns": torch.ones(batch),
+        "residue_mask": torch.ones(batch, residues, dtype=torch.bool),
+        "atom_mask": torch.ones(batch, residues, 13, dtype=torch.bool),
+    }
+    output = vector_only(data, tau=torch.full((batch,), 0.25))
+    (output["P_hat_1"].square().mean() + output["V_hat_1"].square().mean()).backward()
+    expected_unused = {
+        "transport.blocks.0.feedforward.scalar_out.weight",
+        "transport.blocks.0.feedforward.scalar_out.bias",
+    }
+    actual_unused = {
+        name for name, parameter in vector_only.named_parameters()
+        if parameter.grad is None
+    }
+    assert actual_unused == expected_unused
+
+    with pytest.raises(RuntimeError, match="Missing key|Unexpected key"):
+        vector_only.load_state_dict(full_tensor.state_dict(), strict=True)
+    with pytest.raises(RuntimeError, match="Missing key|Unexpected key"):
+        full_tensor.load_state_dict(vector_only.state_dict(), strict=True)
 
 
 def test_tensor_cloud01_checkpoint_roundtrip_and_mismatch_fail_closed():
