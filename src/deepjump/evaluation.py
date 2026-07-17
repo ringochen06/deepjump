@@ -301,10 +301,8 @@ def geometry_frame_statistics(
     unit = bonds / np.clip(lengths[..., None], 1e-12, None)
     angle_cos = (unit[:, :-1] * unit[:, 1:]).sum(axis=-1)[:, valid_angles]
 
-    i, j = np.triu_indices(positions.shape[1], k=1)
+    i, j = np.triu_indices(positions.shape[1], k=3)
     nonbonded = np.ones(len(i), dtype=bool)
-    adjacent = j == i + 1
-    nonbonded[adjacent] = ~bond_mask[i[adjacent]]
     if not nonbonded.any():
         raise ValueError("at least one non-bonded CA pair is required")
     distances = np.linalg.norm(positions[:, i] - positions[:, j], axis=-1)[:, nonbonded]

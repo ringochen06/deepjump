@@ -48,7 +48,7 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--methods", default="mean,ode_1")
     parser.add_argument("--reference-frames", type=int, default=500)
-    parser.add_argument("--calibration-draws", type=int, default=2000)
+    parser.add_argument("--calibration-draws", type=int, default=10000)
     parser.add_argument("--alpha", type=float, default=0.01)
     parser.add_argument("--collision-distance", type=float, default=2.5)
     parser.add_argument("--seed", type=int, default=20260717)
