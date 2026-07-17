@@ -80,8 +80,12 @@ case "$LR_PROFILE" in
     CONFIG=configs/v100_tensorcloud01_vector_only_d1_lowlr_calibration.yaml
     CALIBRATION_DIR="$REPO/runs/v100_tensorcloud01_vector_only_d1_lowlr_calibration"
     ;;
+  fp32)
+    CONFIG=configs/v100_tensorcloud01_vector_only_d1_fp32_calibration.yaml
+    CALIBRATION_DIR="$REPO/runs/v100_tensorcloud01_vector_only_d1_fp32_calibration"
+    ;;
   *)
-    printf 'unsupported LR_PROFILE=%s; expected reference or lowlr\n' "$LR_PROFILE" >&2
+    printf 'unsupported LR_PROFILE=%s; expected reference, lowlr, or fp32\n' "$LR_PROFILE" >&2
     exit 2
     ;;
 esac

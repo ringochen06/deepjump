@@ -155,6 +155,9 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     tensorcloud01_vector_only_lowlr = load_config(
         "configs/v100_tensorcloud01_vector_only_d1_lowlr_calibration.yaml"
     )
+    tensorcloud01_vector_only_fp32 = load_config(
+        "configs/v100_tensorcloud01_vector_only_d1_fp32_calibration.yaml"
+    )
     vector_fp32_highlr = load_config(
         "configs/v100_tensorcloud01_vector_only_fp32_highlr_step230.yaml"
     )
@@ -268,6 +271,22 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     assert tensorcloud01_vector_only_lowlr.train.lr == 5e-4
     assert tensorcloud01_vector_only_lowlr.train.lr_final == 3e-4
     assert tensorcloud01_vector_only_lowlr.train.lr_horizon_steps == 1000
+    assert asdict(tensorcloud01_vector_only_fp32.data) == asdict(
+        tensorcloud01_vector_only.data
+    )
+    assert asdict(tensorcloud01_vector_only_fp32.model) == asdict(
+        tensorcloud01_vector_only.model
+    )
+    reference_train = asdict(tensorcloud01_vector_only.train)
+    fp32_train = asdict(tensorcloud01_vector_only_fp32.train)
+    for key in ("amp", "lr_horizon_steps", "out_dir"):
+        reference_train.pop(key)
+        fp32_train.pop(key)
+    assert reference_train == fp32_train
+    assert not tensorcloud01_vector_only_fp32.train.amp
+    assert tensorcloud01_vector_only_fp32.train.lr == 5e-3
+    assert tensorcloud01_vector_only_fp32.train.lr_final == 3e-3
+    assert tensorcloud01_vector_only_fp32.train.lr_horizon_steps == 1000
     for probe in (vector_fp32_highlr, vector_fp16_lowlr):
         assert asdict(probe.data) == asdict(tensorcloud01_vector_only.data)
         assert asdict(probe.model) == asdict(tensorcloud01_vector_only.model)
