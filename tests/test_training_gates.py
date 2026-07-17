@@ -182,6 +182,7 @@ def test_checkpoint_gate_can_select_one_intermediate_history_record(tmp_path):
 
 def test_tensorcloud01_calibration_runner_is_bounded_and_delta_scoped():
     runner = Path("cloud/huawei/run_tensorcloud01_calibration.sh").read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
     assert 'DELTA=${DELTA:?' in runner
     assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-30}' in runner
     assert '[[ "$HARD_STOP_MINUTES" == 30 ]]' in runner

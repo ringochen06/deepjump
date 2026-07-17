@@ -9,6 +9,8 @@ REPO=${REPO:-/data/deepjump}
 PYTHON=${PYTHON:-/data/venvs/deepjump/bin/python}
 TORCHRUN=${TORCHRUN:-/data/venvs/deepjump/bin/torchrun}
 DATA_ROOT=${DATA_ROOT:-/data/mdcath}
+# Always import the reviewed deployment, never a stale site-packages checkout.
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 EXPECTED_HOSTNAME=${EXPECTED_HOSTNAME:?set EXPECTED_HOSTNAME to the authorized GPU instance hostname}
 SHUTDOWN_ON_EXIT=${SHUTDOWN_ON_EXIT:?set SHUTDOWN_ON_EXIT=1 for the authorized bounded run}
 HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-30}
