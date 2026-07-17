@@ -191,3 +191,23 @@ Recovery is fail-closed: inspect the unique `runs/tensorcloud01_preflight_<RUN_I
 and matching OBS audit prefix, preserve failed artifacts, move or rename the fixed overfit/smoke
 directories, and launch a fresh `RUN_ID` only after correcting the diagnosed cause. Do not resume a
 ten-step engineering smoke, and do not delete failed checkpoints before their evidence is recorded.
+
+If the main TensorCloud01 smoke fails with finite loss but non-finite gradients, do not weaken the
+finite gate or launch calibration. Use the independent numerical matrix to distinguish FP16 range,
+first-step LR shock, and peak-LR instability while keeping architecture, data, and effective batch
+fixed:
+
+```bash
+EXPECTED_HOSTNAME=<authorized-instance-hostname> \
+EXPECTED_REPO_COMMIT=<reviewed-full-sha> \
+BUCKET=obs://deepjump-mdcath-cn4-ringochen \
+SHUTDOWN_ON_EXIT=1 \
+HARD_STOP_MINUTES=35 \
+bash cloud/huawei/run_tensorcloud01_numerics.sh
+```
+
+The three fresh-init probes are FP32 at constant `5e-3` for three steps, FP16 with a 20-step ramp
+to `5e-3` for 30 steps, and FP16 at constant `5e-4` for 30 steps. Each probe is independent, so an
+expected numerical failure does not suppress the other controls. The matrix records every outcome,
+validates and reads back checkpoints for successful probes, archives evidence, and shuts down; it
+never starts calibration or formal training.

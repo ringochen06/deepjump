@@ -36,6 +36,14 @@ OBS_DST="$BUCKET/$OBS_RUN_PREFIX/$RUN_ID"
 shutdown_on_exit() {
   code=$?
   trap - EXIT
+  if [[ "$code" != 0 ]] && command -v obsutil >/dev/null; then
+    set +e
+    printf 'preflight failed; best-effort OBS evidence archive start=%s\n' "$(date -Is)"
+    [[ -d "$RUN_DIR" ]] && timeout 90s obsutil sync "$RUN_DIR" "$OBS_DST/failure/audit"
+    [[ -d "$OVERFIT_DIR" ]] && timeout 90s obsutil sync "$OVERFIT_DIR" "$OBS_DST/failure/overfit"
+    [[ -d "$SMOKE_DIR" ]] && timeout 90s obsutil sync "$SMOKE_DIR" "$OBS_DST/failure/smoke"
+    set -e
+  fi
   printf 'preflight exit=%s; requesting immediate shutdown at %s\n' "$code" "$(date -Is)"
   sudo -n shutdown -h now || printf 'ERROR: immediate shutdown command failed\n' >&2
   exit "$code"
@@ -100,7 +108,7 @@ CUDA_VISIBLE_DEVICES=0 timeout --signal=TERM --kill-after=2m 12m \
 
 printf 'gate=eight_gpu_smoke start=%s\n' "$(date -Is)"
 mkdir "$SMOKE_DIR"
-timeout --signal=TERM --kill-after=2m 18m \
+timeout --signal=TERM --kill-after=2m 6m \
   "$TORCHRUN" --standalone --nproc_per_node=8 \
   scripts/train_ddp.py --config "$SMOKE_CONFIG" \
   2>&1 | tee "$SMOKE_DIR/console.log"

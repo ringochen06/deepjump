@@ -146,6 +146,9 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     tensorcloud_adapt = load_config("configs/v100_tensorcloud_unroll3_adapt1000.yaml")
     tensorcloud01_overfit = load_config("configs/v100_tensorcloud01_overfit.yaml")
     tensorcloud01_smoke = load_config("configs/v100_tensorcloud01_d1_smoke.yaml")
+    tensorcloud01_fp32 = load_config("configs/v100_tensorcloud01_fp32_lr5e3_probe.yaml")
+    tensorcloud01_warmup = load_config("configs/v100_tensorcloud01_fp16_warmup20_probe.yaml")
+    tensorcloud01_lowlr = load_config("configs/v100_tensorcloud01_fp16_lr5e4_probe.yaml")
     assert paperstyle.data.unroll == 1
     assert paperstyle.model.source_noise_v
     assert paperstyle.model.vector_qk and paperstyle.model.paper_ff
@@ -191,5 +194,20 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     assert tensorcloud01_smoke.train.batch_size * 8 * tensorcloud01_smoke.train.grad_accum == 128
     assert tensorcloud01_smoke.train.amp_dtype == "fp16"
     assert tensorcloud01_smoke.train.lr == tensorcloud01_smoke.train.lr_final == 5e-3
+    for probe in (tensorcloud01_fp32, tensorcloud01_warmup, tensorcloud01_lowlr):
+        assert asdict(probe.data) == asdict(tensorcloud01_smoke.data)
+        assert asdict(probe.model) == asdict(tensorcloud01_smoke.model)
+        assert probe.train.batch_size * 8 * probe.train.grad_accum == 128
+    assert not tensorcloud01_fp32.train.amp
+    assert tensorcloud01_fp32.train.lr == tensorcloud01_fp32.train.lr_final == 5e-3
+    assert tensorcloud01_fp32.train.max_steps == 3
+    assert tensorcloud01_warmup.train.amp
+    assert tensorcloud01_warmup.train.warmup_steps == 20
+    assert tensorcloud01_warmup.train.max_steps == 30
+    assert tensorcloud01_warmup.train.lr == tensorcloud01_warmup.train.lr_final == 5e-3
+    assert tensorcloud01_lowlr.train.amp
+    assert tensorcloud01_lowlr.train.warmup_steps == 0
+    assert tensorcloud01_lowlr.train.max_steps == 30
+    assert tensorcloud01_lowlr.train.lr == tensorcloud01_lowlr.train.lr_final == 5e-4
     assert unroll5.train.batch_size * 8 * unroll5.train.grad_accum == 128
     assert unroll5.train.max_steps == 500
