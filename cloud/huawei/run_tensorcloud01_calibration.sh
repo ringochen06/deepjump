@@ -167,6 +167,11 @@ done
   --expected-step 1000 \
   --expected-world-size 8 \
   --output "$RUN_DIR/local_last_gate.json"
+"$PYTHON" scripts/select_calibration_checkpoints.py \
+  --history "$CALIBRATION_DIR/history.json" \
+  --config "$CALIBRATION_DIR/config.json" \
+  --expected-delta "$DELTA" --count 2 \
+  --output "$RUN_DIR/local_checkpoint_selection.json"
 
 printf 'gate=resume_readback start=%s\n' "$(date -Is)"
 timeout --signal=TERM --kill-after=1m 3m \
@@ -204,6 +209,12 @@ done
   --expected-step 1000 \
   --expected-world-size 8 \
   --output "$RUN_DIR/obs_last_gate.json"
+"$PYTHON" scripts/select_calibration_checkpoints.py \
+  --history "$READBACK_DIR/history.json" \
+  --config "$READBACK_DIR/config.json" \
+  --expected-delta "$DELTA" --count 2 \
+  --output "$RUN_DIR/obs_checkpoint_selection.json"
+cmp "$RUN_DIR/local_checkpoint_selection.json" "$RUN_DIR/obs_checkpoint_selection.json"
 
 final_sha=$(sha256sum "$CALIBRATION_DIR/ckpt_1000.pt" | awk '{print $1}')
 printf '{"status":"PASS","scope":"bounded_calibration","run_id":"%s","commit":"%s","delta_frames":%s,"steps":1000,"checkpoint_sha256":"%s","obs":"%s","completed_at":"%s"}\n' \

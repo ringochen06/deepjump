@@ -8,11 +8,12 @@ REPO=${REPO:-/data/deepjump}
 PYTHON=${PYTHON:-/data/venvs/deepjump/bin/python}
 CHECKPOINT=${CHECKPOINT:?set CHECKPOINT to the reviewed TensorCloud01 checkpoint}
 EXPECTED_CHECKPOINT_SHA256=${EXPECTED_CHECKPOINT_SHA256:?set the reviewed checkpoint SHA256}
+EXPECTED_CHECKPOINT_STEP=${EXPECTED_CHECKPOINT_STEP:?set the reviewed checkpoint step}
 EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?set EXPECTED_REPO_COMMIT to the deployed SHA}
 EXPECTED_HOSTNAME=${EXPECTED_HOSTNAME:?set EXPECTED_HOSTNAME to the authorized GPU hostname}
 BUCKET=${BUCKET:?set BUCKET=obs://your-bucket-name}
 SHUTDOWN_ON_EXIT=${SHUTDOWN_ON_EXIT:?set SHUTDOWN_ON_EXIT=1}
-HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-35}
+HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-30}
 RUN_ID=${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
 DOMAIN_LIST=${DOMAIN_LIST:-configs/dev_20_length_proportional_seed0.txt}
 DOMAIN_LIST_SHA256=${DOMAIN_LIST_SHA256:-4fd7015951fc48598d7beb888670d701b39697cdf62c2982a95b2b7b243474af}
@@ -21,6 +22,11 @@ READBACK_DIR="/tmp/tensorcloud01_eval_readback_$RUN_ID"
 OBS_DST="$BUCKET/deepjump-evaluation/tensorcloud01-integration/$RUN_ID"
 
 [[ "$SHUTDOWN_ON_EXIT" == 1 ]] || { printf 'SHUTDOWN_ON_EXIT must be 1\n' >&2; exit 2; }
+[[ "$HARD_STOP_MINUTES" == 30 ]] || { printf 'HARD_STOP_MINUTES must be 30\n' >&2; exit 2; }
+[[ "$EXPECTED_CHECKPOINT_STEP" =~ ^(30|250|500|750|1000)$ ]] || {
+  printf 'unsupported checkpoint step\n' >&2
+  exit 2
+}
 [[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]] || { printf 'hostname mismatch\n' >&2; exit 2; }
 
 shutdown_on_exit() {
@@ -92,7 +98,7 @@ done
   --transition "$RUN_DIR/transition_5x5.json" \
   --geometry-20 "$RUN_DIR/geometry_20_5x5.json" \
   --geometry-100 "$RUN_DIR/geometry_100_5x5.json" \
-  --expected-checkpoint "$CHECKPOINT" --expected-step 30 --expected-domains 1 \
+  --expected-checkpoint "$CHECKPOINT" --expected-step "$EXPECTED_CHECKPOINT_STEP" --expected-domains 1 \
   --output "$RUN_DIR/local_gate.json"
 
 (
@@ -111,11 +117,11 @@ obsutil sync "$OBS_DST" "$READBACK_DIR"
   --transition "$READBACK_DIR/transition_5x5.json" \
   --geometry-20 "$READBACK_DIR/geometry_20_5x5.json" \
   --geometry-100 "$READBACK_DIR/geometry_100_5x5.json" \
-  --expected-checkpoint "$CHECKPOINT" --expected-step 30 --expected-domains 1 \
+  --expected-checkpoint "$CHECKPOINT" --expected-step "$EXPECTED_CHECKPOINT_STEP" --expected-domains 1 \
   --output "$RUN_DIR/obs_gate.json"
 
-printf '{"status":"PASS","scope":"integration_only","run_id":"%s","commit":"%s","checkpoint_sha256":"%s","cells_per_domain":25,"evaluated_domains":1,"obs":"%s","completed_at":"%s"}\n' \
-  "$RUN_ID" "$actual_commit" "$actual_checkpoint_sha" "$OBS_DST" "$(date -Is)" \
+printf '{"status":"PASS","scope":"integration_only","run_id":"%s","commit":"%s","checkpoint_step":%s,"checkpoint_sha256":"%s","cells_per_domain":25,"evaluated_domains":1,"obs":"%s","completed_at":"%s"}\n' \
+  "$RUN_ID" "$actual_commit" "$EXPECTED_CHECKPOINT_STEP" "$actual_checkpoint_sha" "$OBS_DST" "$(date -Is)" \
   | tee "$RUN_DIR/summary.json"
 obsutil sync "$RUN_DIR" "$OBS_DST"
 printf 'Strict 5x5 model-level integration PASS; scientific calibration/training was not started.\n'
