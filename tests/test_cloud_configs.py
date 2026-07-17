@@ -152,6 +152,12 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     tensorcloud01_vector_only = load_config(
         "configs/v100_tensorcloud01_vector_only_d1_calibration.yaml"
     )
+    vector_fp32_highlr = load_config(
+        "configs/v100_tensorcloud01_vector_only_fp32_highlr_step230.yaml"
+    )
+    vector_fp16_lowlr = load_config(
+        "configs/v100_tensorcloud01_vector_only_fp16_lowlr_step230.yaml"
+    )
     assert paperstyle.data.unroll == 1
     assert paperstyle.model.source_noise_v
     assert paperstyle.model.vector_qk and paperstyle.model.paper_ff
@@ -244,6 +250,28 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     vector_train.pop("out_dir")
     full_train.pop("out_dir")
     assert vector_train == full_train
+    for probe in (vector_fp32_highlr, vector_fp16_lowlr):
+        assert asdict(probe.data) == asdict(tensorcloud01_vector_only.data)
+        assert asdict(probe.model) == asdict(tensorcloud01_vector_only.model)
+        assert probe.train.batch_size * 8 * probe.train.grad_accum == 128
+        assert probe.train.max_steps == 230
+        assert probe.train.lr_horizon_steps == 1000
+        assert probe.train.warmup_steps == 200
+        assert probe.train.val_every == probe.train.ckpt_every == 230
+        assert probe.train.keep_last_k == 1
+    fp32_train = asdict(vector_fp32_highlr.train)
+    fp16_train = asdict(vector_fp16_lowlr.train)
+    for key in ("amp", "lr", "lr_final", "out_dir"):
+        fp32_train.pop(key)
+        fp16_train.pop(key)
+    assert fp32_train == fp16_train
+    assert not vector_fp32_highlr.train.amp
+    assert vector_fp32_highlr.train.lr == 5e-3
+    assert vector_fp32_highlr.train.lr_final == 3e-3
+    assert vector_fp16_lowlr.train.amp
+    assert vector_fp16_lowlr.train.amp_dtype == "fp16"
+    assert vector_fp16_lowlr.train.lr == 5e-4
+    assert vector_fp16_lowlr.train.lr_final == 3e-4
     for calibration, expected_delta in zip(calibrations, (1, 10, 100), strict=True):
         calibration_data = asdict(calibration.data)
         smoke_data = asdict(tensorcloud01_smoke.data)

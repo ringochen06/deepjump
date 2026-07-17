@@ -75,6 +75,7 @@ class TrainConfig:
     amp_dtype: str = "bf16"  # bf16 (A100, no scaler) or fp16 (V100, needs GradScaler)
     lr_final: float = 0.0  # if >0, linearly decay lr -> lr_final over max_steps (paper: 5e-3->3e-3)
     warmup_steps: int = 0  # linear LR warmup
+    lr_horizon_steps: int = 0  # optional LR horizon independent of bounded run length
     ckpt_every: int = 5000  # steps between full (model+opt+sched) checkpoints
     keep_last_k: int = 3  # rolling checkpoints to keep
     resume: str = ""  # path to a checkpoint to resume optimizer/scheduler/step from

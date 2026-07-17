@@ -6,6 +6,8 @@ from pathlib import Path
 import torch
 
 from scripts.train import fast_dev_gate_errors
+from deepjump.config import load_config
+from deepjump.training import lr_at
 
 
 def test_fast_dev_gate_accepts_finite_improvement():
@@ -39,6 +41,23 @@ def test_fast_dev_gate_rejects_finite_but_weak_improvement():
     errors = fast_dev_gate_errors(report, 0.25, 0.5)
     assert any("loss ratio" in error for error in errors)
     assert any("RMSD ratio" in error for error in errors)
+
+
+def test_lr_horizon_preserves_reference_schedule_for_bounded_probe():
+    reference = load_config("configs/v100_tensorcloud01_vector_only_d1_calibration.yaml")
+    fp32 = load_config(
+        "configs/v100_tensorcloud01_vector_only_fp32_highlr_step230.yaml"
+    )
+    fp16 = load_config(
+        "configs/v100_tensorcloud01_vector_only_fp16_lowlr_step230.yaml"
+    )
+    for step in (0, 199, 200, 220, 229):
+        assert lr_at(step, fp32) == lr_at(step, reference)
+        assert lr_at(step, fp16) == lr_at(step, reference) / 10
+    assert fp32.train.max_steps == fp16.train.max_steps == 230
+    assert fp32.train.lr_horizon_steps == fp16.train.lr_horizon_steps == 1000
+    assert not fp32.train.amp
+    assert fp16.train.amp and fp16.train.amp_dtype == "fp16"
 
 
 def _write_checkpoint(
@@ -191,6 +210,7 @@ def test_tensorcloud01_calibration_runner_is_bounded_and_delta_scoped():
         "BUCKET=${BUCKET:?"
     )
     assert 'sudo -n shutdown -h now' in runner
+    assert "another train_ddp.py process already exists" in runner
     assert '[[ "$code" != 0 ]] || code=$shutdown_code' in runner
     assert 'scripts/train_ddp.py --config "$CONFIG"' in runner
     assert 'timeout --signal=TERM --kill-after=30s 8m' in runner
@@ -205,3 +225,26 @@ def test_tensorcloud01_calibration_runner_is_bounded_and_delta_scoped():
     assert "params=4,038,240" in runner
     assert "--require-vector-only" in runner
     assert "vector-only calibration is frozen to delta=1" in runner
+
+
+def test_vector_only_numerics_discriminator_is_bounded_and_two_arm_scoped():
+    runner = Path("cloud/huawei/run_vector_only_step221_discriminator.sh").read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-20}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 20 ]]' in runner
+    assert runner.index('sudo -n shutdown -h "+$HARD_STOP_MINUTES"') < runner.index(
+        "BUCKET=${BUCKET:?"
+    )
+    assert 'sudo -n shutdown -h now' in runner
+    assert "v100_tensorcloud01_vector_only_fp32_highlr_step230.yaml" in runner
+    assert "v100_tensorcloud01_vector_only_fp16_lowlr_step230.yaml" in runner
+    assert "timeout --signal=TERM --kill-after=30s 8m" in runner
+    assert "--expected-step 230" in runner
+    assert "--expected-world-size 8" in runner
+    assert "--require-vector-only" in runner
+    assert "scaler_skips [1-9][0-9]*" in runner
+    assert '"status":"MATRIX_COMPLETE"' in runner
+    assert "OBS_DST/$label" in runner
+    assert "sha256sum -c" in runner
+    assert "formal training was not started" in runner
+    assert "--warm-start" not in runner
