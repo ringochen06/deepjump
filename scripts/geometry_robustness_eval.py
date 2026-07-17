@@ -15,7 +15,7 @@ from deepjump.data import discover_domains
 from deepjump.data.mdcath import _DomainHandle
 from deepjump.evaluation import (
     aggregate_geometry_panel,
-    calibrate_geometry_envelope,
+    calibrate_geometry_worst_envelope,
     geometry_frame_statistics,
     geometry_panel_passes,
     load_frozen_domain_ids,
@@ -105,9 +105,10 @@ def main() -> None:
             bond_mask,
             collision_distance=args.collision_distance,
         )
-        envelope = calibrate_geometry_envelope(
+        envelope = calibrate_geometry_worst_envelope(
             reference_statistics,
             args.starts,
+            args.steps,
             draws=args.calibration_draws,
             alpha=args.alpha,
             seed=args.seed + domain_index,

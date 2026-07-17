@@ -274,6 +274,120 @@ def paired_domain_bootstrap_gain(
     }
 
 
+def aggregate_complete_trajectory_grid(
+    values: dict[tuple[int, int], Sequence[float] | float],
+    temperatures: Sequence[int],
+    replicas: Sequence[int],
+) -> tuple[float, dict[str, float]]:
+    """Equally aggregate a complete temperature-by-replica grid within a domain.
+
+    Starts/draws are averaged inside each cell first. Every requested cell then
+    receives equal weight, regardless of trajectory length or valid-start count.
+    Missing or extra cells fail closed so an apparent 5x5 result cannot silently
+    degrade to the first available trajectory.
+    """
+    expected = {(int(temp), int(rep)) for temp in temperatures for rep in replicas}
+    actual = {(int(temp), int(rep)) for temp, rep in values}
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise ValueError(f"trajectory grid mismatch: missing={missing} extra={extra}")
+    cells: dict[str, float] = {}
+    for temp, rep in sorted(expected):
+        cell = np.asarray(values[(temp, rep)], dtype=np.float64)
+        if cell.ndim == 0:
+            cell = cell.reshape(1)
+        if cell.ndim != 1 or len(cell) == 0 or not np.isfinite(cell).all():
+            raise ValueError(f"cell {(temp, rep)} must contain finite values")
+        cells[f"{temp}/{rep}"] = float(cell.mean())
+    return float(np.mean(list(cells.values()))), cells
+
+
+def audit_manifest_eligibility(
+    manifest: Sequence[dict],
+    domain_ids: Sequence[str],
+    temperatures: Sequence[int],
+    replicas: Sequence[int],
+    *,
+    delta: int,
+    unroll: int,
+) -> dict[str, object]:
+    """Audit valid t -> t + unroll*delta starts from a frozen manifest panel."""
+    delta = require_single_delta(delta)
+    if unroll < 1:
+        raise ValueError("unroll must be positive")
+    by_domain: dict[str, dict] = {}
+    for entry in manifest:
+        identifier = str(entry.get("domain") or domain_id(entry["file"]))
+        if identifier in by_domain:
+            raise ValueError(f"duplicate manifest domain: {identifier}")
+        by_domain[identifier] = entry
+    missing_domains = [identifier for identifier in domain_ids if identifier not in by_domain]
+    if missing_domains:
+        raise ValueError(f"frozen domains missing from manifest: {missing_domains[:10]}")
+
+    requested_cells = {
+        (int(temp), int(rep)) for temp in temperatures for rep in replicas
+    }
+    domain_rows = []
+    eligible_trajectories = 0
+    valid_starts_total = 0
+    for identifier in domain_ids:
+        entry = by_domain[identifier]
+        trajectories = {
+            (int(row["temp"]), int(row["replica"])): int(row["num_frames"])
+            for row in entry.get("trajectories", [])
+            if int(row["temp"]) in temperatures and int(row["replica"]) in replicas
+        }
+        cells = []
+        eligible_cells = 0
+        domain_starts = 0
+        for temp, rep in sorted(requested_cells):
+            frames = trajectories.get((temp, rep))
+            if frames is None:
+                cells.append({
+                    "temperature": temp, "replica": rep, "eligible": False,
+                    "num_frames": None, "valid_starts": 0,
+                    "skip_reason": "missing_trajectory",
+                })
+                continue
+            valid_starts = max(0, frames - delta * unroll)
+            eligible = valid_starts > 0
+            cells.append({
+                "temperature": temp, "replica": rep, "eligible": eligible,
+                "num_frames": frames, "valid_starts": valid_starts,
+                "skip_reason": None if eligible else "insufficient_frames",
+            })
+            if eligible:
+                eligible_cells += 1
+                eligible_trajectories += 1
+                domain_starts += valid_starts
+                valid_starts_total += valid_starts
+        domain_rows.append({
+            "domain": identifier,
+            "eligible_any": eligible_cells > 0,
+            "eligible_full_grid": eligible_cells == len(requested_cells),
+            "eligible_trajectories": eligible_cells,
+            "expected_trajectories": len(requested_cells),
+            "valid_starts": domain_starts,
+            "cells": cells,
+        })
+    return {
+        "delta_frames": delta,
+        "unroll": unroll,
+        "required_future_offset_frames": delta * unroll,
+        "requested_domains": len(domain_ids),
+        "requested_trajectories": len(domain_ids) * len(requested_cells),
+        "eligible_domains_any": sum(row["eligible_any"] for row in domain_rows),
+        "eligible_domains_full_grid": sum(
+            row["eligible_full_grid"] for row in domain_rows
+        ),
+        "eligible_trajectories": eligible_trajectories,
+        "valid_starts": valid_starts_total,
+        "domains": domain_rows,
+    }
+
+
 def geometry_frame_statistics(
     positions: np.ndarray,
     bond_mask: np.ndarray,
@@ -357,6 +471,42 @@ def calibrate_geometry_envelope(
             "low": float(low),
             "high": float(high),
             "reference": float(values.max() if name == "bond_max" else values.mean()),
+        }
+    return envelope
+
+
+def calibrate_geometry_worst_envelope(
+    statistics: dict[str, np.ndarray],
+    panel_size: int,
+    horizon: int,
+    *,
+    draws: int = 10000,
+    alpha: float = 0.01,
+    seed: int = 0,
+) -> dict[str, dict[str, float]]:
+    """Calibrate a family-wise real envelope across every step from 1 through H."""
+    if horizon < 1:
+        raise ValueError("horizon must be positive")
+    if panel_size < 1 or draws < 2 or not 0 < alpha < 1:
+        raise ValueError("panel_size/draws must be positive and alpha must be in (0, 1)")
+    lengths = {len(np.asarray(values)) for values in statistics.values()}
+    if len(lengths) != 1 or not lengths or next(iter(lengths)) < 2:
+        raise ValueError("all geometry statistics need the same length of at least two")
+    count = next(iter(lengths))
+    rng = np.random.default_rng(seed)
+    indices = rng.integers(0, count, size=(draws, horizon, panel_size))
+    envelope = {}
+    for name, values in statistics.items():
+        values = np.asarray(values, dtype=np.float64)
+        panels = values[indices]
+        per_step = panels.max(axis=2) if name == "bond_max" else panels.mean(axis=2)
+        low = np.quantile(per_step.min(axis=1), alpha / 2)
+        high = np.quantile(per_step.max(axis=1), 1 - alpha / 2)
+        envelope[name] = {
+            "low": float(low),
+            "high": float(high),
+            "reference": float(values.max() if name == "bond_max" else values.mean()),
+            "horizon": int(horizon),
         }
     return envelope
 

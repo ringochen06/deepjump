@@ -144,6 +144,8 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     paperstyle_unroll3 = load_config("configs/v100_paperstyle_unroll3_1000.yaml")
     tensorcloud_smoke = load_config("configs/v100_tensorcloud_d1_smoke.yaml")
     tensorcloud_adapt = load_config("configs/v100_tensorcloud_unroll3_adapt1000.yaml")
+    tensorcloud01_overfit = load_config("configs/v100_tensorcloud01_overfit.yaml")
+    tensorcloud01_smoke = load_config("configs/v100_tensorcloud01_d1_smoke.yaml")
     assert paperstyle.data.unroll == 1
     assert paperstyle.model.source_noise_v
     assert paperstyle.model.vector_qk and paperstyle.model.paper_ff
@@ -175,5 +177,19 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     assert tensorcloud_adapt.train.w_unroll == 0.5
     assert tensorcloud_adapt.train.max_steps == 1000
     assert tensorcloud_adapt.train.warmup_steps == 200
+    assert tensorcloud01_overfit.data.domains == ["1a0hA01"]
+    assert tensorcloud01_overfit.model.tensor_cloud01
+    assert tensorcloud01_overfit.model.hidden == tensorcloud01_overfit.model.vector_channels == 32
+    assert not tensorcloud01_overfit.train.amp
+    assert tensorcloud01_overfit.train.batch_size == 1
+    assert tensorcloud01_smoke.model.tensor_cloud01
+    assert tensorcloud01_smoke.model.hidden == tensorcloud01_smoke.model.vector_channels == 128
+    assert not tensorcloud01_smoke.model.vector_qk
+    assert not tensorcloud01_smoke.model.tensor_qkv
+    assert not tensorcloud01_smoke.model.paper_ff
+    assert tensorcloud01_smoke.train.max_steps == 10
+    assert tensorcloud01_smoke.train.batch_size * 8 * tensorcloud01_smoke.train.grad_accum == 128
+    assert tensorcloud01_smoke.train.amp_dtype == "fp16"
+    assert tensorcloud01_smoke.train.lr == tensorcloud01_smoke.train.lr_final == 5e-3
     assert unroll5.train.batch_size * 8 * unroll5.train.grad_accum == 128
     assert unroll5.train.max_steps == 500
