@@ -125,6 +125,13 @@ def test_transition_nonpositive_ci_fails_closed():
         validate_scientific_transition(result, **_common())
 
 
+def test_transition_wrong_paired_domain_count_fails_closed():
+    result = _transition_result()
+    result["summary"]["mean"]["paired_energy_score_gain"]["domains"] = 1
+    with pytest.raises(ValueError, match="expected number of domains"):
+        validate_scientific_transition(result, **_common())
+
+
 def test_transition_wrong_panel_or_delta_fails_closed():
     result = _transition_result()
     result["domain_panel"]["sha256"] = "0" * 64

@@ -89,9 +89,15 @@ def test_vector_only_attention_ignores_scalar_content_and_has_no_scalar_projecti
         assert torch.isfinite(parameter.grad).all(), name
 
 
-def test_tensor_cloud01_rotation_translation_mask_and_gradients():
+@pytest.mark.parametrize("vector_only_attention", [False, True])
+def test_tensor_cloud01_rotation_translation_mask_and_gradients(
+    vector_only_attention,
+):
     torch.manual_seed(5)
-    block = TensorCloud01Block(8, 2, 4, 4, 10.0)
+    block = TensorCloud01Block(
+        8, 2, 4, 4, 10.0,
+        vector_only_attention=vector_only_attention,
+    )
     scalar = torch.randn(2, 5, 8, requires_grad=True)
     vector = torch.randn(2, 5, 8, 3, requires_grad=True)
     positions = torch.randn(2, 5, 3)
@@ -116,8 +122,11 @@ def test_tensor_cloud01_rotation_translation_mask_and_gradients():
         assert torch.isfinite(parameter.grad).all(), name
 
 
-def test_attention_all_mask_is_finite_and_zero():
-    attention = TensorCloud01Attention(hidden=8, num_heads=2)
+@pytest.mark.parametrize("vector_only", [False, True])
+def test_attention_all_mask_is_finite_and_zero(vector_only):
+    attention = TensorCloud01Attention(
+        hidden=8, num_heads=2, vector_only=vector_only
+    )
     scalar_out, vector_out = attention(
         torch.randn(1, 3, 8),
         torch.randn(1, 3, 8, 3),

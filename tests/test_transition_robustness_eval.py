@@ -121,23 +121,26 @@ def test_evaluate_cell_pairs_model_equal_to_noop_on_identical_evidence(monkeypat
 def test_transition_summary_gain_is_noop_minus_model_and_equal_model_fails():
     rows = []
     for index in range(20):
+        energy_gain = 0.05 + 0.015 * index
+        msm_gain = 0.03 + 0.008 * index
         noop = {
             "mean_energy_score": 1.0 + index / 100,
             "transition_energy_distance": 1.0,
             "msm_row_jsd_bits": 0.8 + index / 100,
         }
         model = {
-            "mean_energy_score": noop["mean_energy_score"] - 0.2,
+            "mean_energy_score": noop["mean_energy_score"] - energy_gain,
             "transition_energy_distance": 0.9,
-            "msm_row_jsd_bits": noop["msm_row_jsd_bits"] - 0.1,
+            "msm_row_jsd_bits": noop["msm_row_jsd_bits"] - msm_gain,
         }
         rows.append({"methods": {"noop": noop, "mean": model}})
     summary = summarize_transition_methods(rows, ["mean"], seed=5)
-    assert summary["mean"]["paired_energy_score_gain"]["passes"] is True
-    assert summary["mean"]["paired_energy_score_gain"][
-        "mean_baseline_minus_model"
-    ] == pytest.approx(0.2)
-    assert summary["mean"]["paired_msm_row_jsd_gain"]["passes"] is True
+    for name in ("paired_energy_score_gain", "paired_msm_row_jsd_gain"):
+        statistic = summary["mean"][name]
+        low, high = statistic["ci95"]
+        assert statistic["passes"] is True
+        assert low < statistic["mean_baseline_minus_model"] < high
+        assert high - low > 0
 
     equal_rows = [
         {"methods": {"noop": row["methods"]["noop"], "mean": row["methods"]["noop"]}}
