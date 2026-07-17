@@ -14,10 +14,15 @@ from deepjump.config import ModelConfig
 from deepjump.data import discover_domains
 from deepjump.data.mdcath import _DomainHandle
 from deepjump.evaluation import (
+    assign_clusters,
+    fit_kmeans,
     load_frozen_domain_ids,
+    paired_domain_bootstrap_gain,
     reference_transition_deltas,
     require_single_delta,
     resolve_frozen_domains,
+    transition_matrix,
+    weighted_row_jsd_bits,
 )
 from deepjump.model import DeepJumpLite
 from deepjump.representation import apply_layout
@@ -72,11 +77,15 @@ def main() -> None:
     ap.add_argument("--domain-list-sha256", required=True)
     ap.add_argument("--domains", type=int, default=10)
     ap.add_argument("--starts", type=int, default=50)
-    ap.add_argument("--draws", type=int, default=4)
+    ap.add_argument("--draws", type=int, default=16)
     ap.add_argument("--methods", default="mean,ode_1")
     ap.add_argument("--real-frames", type=int, default=500)
     ap.add_argument("--max-features", type=int, default=512)
     ap.add_argument("--lag", type=int, default=10)
+    ap.add_argument("--tica-components", type=int, default=4)
+    ap.add_argument("--clusters", type=int, default=32)
+    ap.add_argument("--msm-lag", type=int, default=1)
+    ap.add_argument("--msm-pseudocount", type=float, default=1e-8)
     ap.add_argument("--seed", type=int, default=20260717)
     ap.add_argument(
         "--noise-sigma", type=float, default=None,
@@ -90,6 +99,12 @@ def main() -> None:
     ck = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cm, cd = ck["cfg"]["model"], ck["cfg"]["data"]
     delta = require_single_delta(cd["delta_frames"])
+    if args.msm_lag < 1:
+        raise ValueError("msm_lag must be positive")
+    if delta % args.msm_lag:
+        raise ValueError(
+            f"delta={delta} must be divisible by msm_lag={args.msm_lag}"
+        )
     device = resolve_device(ck["cfg"]["train"]["device"])
     noise_sigma = cd["noise_sigma"] if args.noise_sigma is None else args.noise_sigma
     model = DeepJumpLite(
@@ -128,15 +143,29 @@ def main() -> None:
             P = P - P.mean(0, keepdim=True)
             real_features.append(pairdist_features(P, pairs))
         real_features = np.stack(real_features)
-        feature_mean, projection = fit_tica(real_features, lag=args.lag)
+        feature_mean, projection = fit_tica(
+            real_features, lag=args.lag, n_components=args.tica_components
+        )
         real_tic = (real_features - feature_mean) @ projection
         reference_delta = reference_transition_deltas(real_tic, delta)
         self_floor = energy_distance(reference_delta[::2], reference_delta[1::2])
+        cluster_centers, real_cluster_labels = fit_kmeans(
+            real_tic, args.clusters, seed=args.seed + domain_index
+        )
+        one_step_msm, _ = transition_matrix(
+            real_cluster_labels,
+            n_states=args.clusters,
+            lag=args.msm_lag,
+            pseudocount=args.msm_pseudocount,
+        )
+        target_msm = np.linalg.matrix_power(one_step_msm, delta // args.msm_lag)
 
         possible = frame_ids[:-delta]
         starts = possible[np.linspace(0, len(possible) - 1, min(args.starts, len(possible)), dtype=int)]
         scores = {"noop": []} | {m: [] for m in methods}
         predicted_delta = {"noop": []} | {m: [] for m in methods}
+        transition_origins = []
+        transition_destinations = {"noop": []} | {m: [] for m in methods}
 
         for start_index, frame in enumerate(starts):
             coords0 = torch.from_numpy(np.asarray(h.coords(temp, rep, int(frame))))
@@ -150,6 +179,9 @@ def main() -> None:
             tic1 = (pairdist_features(P1, pairs) - feature_mean) @ projection
             scores["noop"].append(energy_score(tic0[None], tic1))
             predicted_delta["noop"].append(np.zeros((1, len(tic0))))
+            origin_cluster = int(assign_clusters(tic0[None], cluster_centers)[0])
+            transition_origins.extend([origin_cluster] * args.draws)
+            transition_destinations["noop"].extend([origin_cluster] * args.draws)
 
             batch = {
                 "P_t": P0[None].to(device),
@@ -177,10 +209,14 @@ def main() -> None:
                 pred_tic = (pairdist_features(pred, pairs) - feature_mean) @ projection
                 scores[method].append(energy_score(pred_tic, tic1))
                 predicted_delta[method].append(pred_tic - tic0[None])
+                transition_destinations[method].extend(
+                    assign_clusters(pred_tic, cluster_centers).tolist()
+                )
 
-        noop_delta = np.concatenate(predicted_delta["noop"])
         domain = {
             "domain": h.name,
+            "temperature": temp,
+            "replica": rep,
             "starts": len(starts),
             "draws": args.draws,
             "reference_transitions": len(reference_delta),
@@ -188,11 +224,25 @@ def main() -> None:
             "methods": {},
         }
         for method in ["noop", *methods]:
-            delta = np.concatenate(predicted_delta[method])
+            predicted_increment = np.concatenate(predicted_delta[method])
+            predicted_msm, origin_counts = transition_matrix(
+                np.asarray(transition_origins),
+                np.asarray(transition_destinations[method]),
+                n_states=args.clusters,
+                pseudocount=args.msm_pseudocount,
+            )
+            row_jsd, row_values = weighted_row_jsd_bits(
+                target_msm, predicted_msm, origin_counts
+            )
             domain["methods"][method] = {
                 "mean_energy_score": float(np.mean(scores[method])),
                 "median_energy_score": float(np.median(scores[method])),
-                "transition_energy_distance": energy_distance(reference_delta, delta),
+                "transition_energy_distance": energy_distance(
+                    reference_delta, predicted_increment
+                ),
+                "msm_row_jsd_bits": row_jsd,
+                "msm_observed_origin_states": int((origin_counts > 0).sum()),
+                "msm_max_observed_row_jsd_bits": float(row_values[origin_counts > 0].max()),
             }
         rows.append(domain)
         h.close()
@@ -206,6 +256,9 @@ def main() -> None:
             "mean_transition_energy_distance": float(np.mean([
                 row["methods"][method]["transition_energy_distance"] for row in rows
             ])),
+            "mean_msm_row_jsd_bits": float(np.mean([
+                row["methods"][method]["msm_row_jsd_bits"] for row in rows
+            ])),
             "domains_better_than_noop_score": sum(
                 row["methods"][method]["mean_energy_score"]
                 < row["methods"]["noop"]["mean_energy_score"] for row in rows
@@ -214,7 +267,30 @@ def main() -> None:
                 row["methods"][method]["transition_energy_distance"]
                 < row["methods"]["noop"]["transition_energy_distance"] for row in rows
             ) if method != "noop" else 0,
+            "domains_better_than_noop_msm": sum(
+                row["methods"][method]["msm_row_jsd_bits"]
+                < row["methods"]["noop"]["msm_row_jsd_bits"] for row in rows
+            ) if method != "noop" else 0,
         }
+        if method != "noop":
+            summary[method]["paired_energy_score_gain"] = paired_domain_bootstrap_gain(
+                np.asarray([
+                    row["methods"][method]["mean_energy_score"] for row in rows
+                ]),
+                np.asarray([
+                    row["methods"]["noop"]["mean_energy_score"] for row in rows
+                ]),
+                seed=args.seed,
+            )
+            summary[method]["paired_msm_row_jsd_gain"] = paired_domain_bootstrap_gain(
+                np.asarray([
+                    row["methods"][method]["msm_row_jsd_bits"] for row in rows
+                ]),
+                np.asarray([
+                    row["methods"]["noop"]["msm_row_jsd_bits"] for row in rows
+                ]),
+                seed=args.seed + 1,
+            )
     result = {
         "checkpoint": args.ckpt,
         "checkpoint_step": ck["step"],
