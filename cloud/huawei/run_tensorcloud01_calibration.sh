@@ -61,6 +61,7 @@ DELTA=${DELTA:?set DELTA to exactly 1}
 TRAIN_TIMEOUT_MINUTES=${TRAIN_TIMEOUT_MINUTES:-24}
 RUN_ID=${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
 OBS_RUN_PREFIX=${OBS_RUN_PREFIX:-deepjump-calibration/tensorcloud01}
+LR_PROFILE=${LR_PROFILE:-reference}
 
 [[ "$DELTA" == 1 ]] || {
   printf 'unsupported DELTA=%s; vector-only calibration is frozen to delta=1\n' "$DELTA" >&2
@@ -70,19 +71,31 @@ OBS_RUN_PREFIX=${OBS_RUN_PREFIX:-deepjump-calibration/tensorcloud01}
   printf 'refusing training timeout above 24 minutes\n' >&2
   exit 2
 }
-CONFIG=configs/v100_tensorcloud01_vector_only_d1_calibration.yaml
-CALIBRATION_DIR="$REPO/runs/v100_tensorcloud01_vector_only_d1_calibration"
+case "$LR_PROFILE" in
+  reference)
+    CONFIG=configs/v100_tensorcloud01_vector_only_d1_calibration.yaml
+    CALIBRATION_DIR="$REPO/runs/v100_tensorcloud01_vector_only_d1_calibration"
+    ;;
+  lowlr)
+    CONFIG=configs/v100_tensorcloud01_vector_only_d1_lowlr_calibration.yaml
+    CALIBRATION_DIR="$REPO/runs/v100_tensorcloud01_vector_only_d1_lowlr_calibration"
+    ;;
+  *)
+    printf 'unsupported LR_PROFILE=%s; expected reference or lowlr\n' "$LR_PROFILE" >&2
+    exit 2
+    ;;
+esac
 
 RUN_DIR="$REPO/runs/tensorcloud01_d${DELTA}_calibration_audit_$RUN_ID"
 READBACK_DIR="/tmp/tensorcloud01_d${DELTA}_calibration_readback_$RUN_ID"
-OBS_DST="$BUCKET/$OBS_RUN_PREFIX/delta$DELTA/$RUN_ID"
+OBS_DST="$BUCKET/$OBS_RUN_PREFIX/$LR_PROFILE/delta$DELTA/$RUN_ID"
 
 cd "$REPO"
 mkdir -p "$RUN_DIR"
 exec > >(tee -a "$RUN_DIR/calibration.log") 2>&1
 
-printf 'run_id=%s delta=%s start=%s hard_stop_minutes=%s train_timeout_minutes=%s obs_dst=%s\n' \
-  "$RUN_ID" "$DELTA" "$(date -Is)" "$HARD_STOP_MINUTES" "$TRAIN_TIMEOUT_MINUTES" "$OBS_DST"
+printf 'run_id=%s delta=%s lr_profile=%s start=%s hard_stop_minutes=%s train_timeout_minutes=%s obs_dst=%s\n' \
+  "$RUN_ID" "$DELTA" "$LR_PROFILE" "$(date -Is)" "$HARD_STOP_MINUTES" "$TRAIN_TIMEOUT_MINUTES" "$OBS_DST"
 
 command -v obsutil >/dev/null
 [[ -x "$PYTHON" ]] || { printf 'missing python: %s\n' "$PYTHON" >&2; exit 2; }
@@ -233,8 +246,9 @@ done
 cmp "$RUN_DIR/local_checkpoint_selection.json" "$RUN_DIR/obs_checkpoint_selection.json"
 
 final_sha=$(sha256sum "$CALIBRATION_DIR/ckpt_1000.pt" | awk '{print $1}')
-printf '{"status":"PASS","scope":"bounded_calibration","run_id":"%s","commit":"%s","delta_frames":%s,"steps":1000,"checkpoint_sha256":"%s","obs":"%s","completed_at":"%s"}\n' \
-  "$RUN_ID" "$actual_commit" "$DELTA" "$final_sha" "$OBS_DST" "$(date -Is)" \
+printf '{"status":"PASS","scope":"bounded_calibration","run_id":"%s","commit":"%s","lr_profile":"%s","delta_frames":%s,"steps":1000,"checkpoint_sha256":"%s","obs":"%s","completed_at":"%s"}\n' \
+  "$RUN_ID" "$actual_commit" "$LR_PROFILE" "$DELTA" "$final_sha" "$OBS_DST" "$(date -Is)" \
   | tee "$RUN_DIR/summary.json"
 obsutil sync "$RUN_DIR" "$OBS_DST/audit"
-printf 'TensorCloud01 delta=%s bounded calibration PASS; formal training was not started.\n' "$DELTA"
+printf 'TensorCloud01 delta=%s lr_profile=%s bounded calibration PASS; formal training was not started.\n' \
+  "$DELTA" "$LR_PROFILE"

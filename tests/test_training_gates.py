@@ -222,6 +222,10 @@ def test_tensorcloud01_calibration_runner_is_bounded_and_delta_scoped():
     assert "--warm-start" not in runner
     assert "formal training was not started" in runner
     assert "v100_tensorcloud01_vector_only_d1_calibration.yaml" in runner
+    assert "v100_tensorcloud01_vector_only_d1_lowlr_calibration.yaml" in runner
+    assert 'LR_PROFILE=${LR_PROFILE:-reference}' in runner
+    assert 'unsupported LR_PROFILE=%s; expected reference or lowlr' in runner
+    assert '"lr_profile":"%s"' in runner
     assert "params=4,038,240" in runner
     assert "--require-vector-only" in runner
     assert "vector-only calibration is frozen to delta=1" in runner
