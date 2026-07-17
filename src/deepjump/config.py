@@ -43,6 +43,7 @@ class ModelConfig:
     vector_qk: bool = False  # gated vector-channel contribution to attention q/k logits
     tensor_qkv: bool = False  # Algorithm-1 joint scalar/vector Tensor-Cloud q/k/v
     paper_ff: bool = False  # Algorithm-2-style F=2 scalar/vector feed-forward
+    tensor_cloud01: bool = False  # dedicated equal-multiplicity l=0/l=1 Algorithm-1/2 path
 
 
 @dataclass

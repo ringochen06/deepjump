@@ -150,6 +150,20 @@ def _worker(rank, world, ret):
     same6, total6, first_bad6 = _frac_synced(m6, world)
     tensor_qkv_synced = same6 == total6
 
+    # (7) The dedicated equal-multiplicity TensorCloud01 path has a structurally
+    # unused final scalar FF projection because the transport head is vector-only.
+    # DDP must traverse the graph and synchronize every parameter that is used.
+    tensor01_cfg = ModelConfig(
+        hidden=16, vector_channels=16, num_heads=2, cond_layers=1,
+        transport_layers=1, tensor_cloud01=True,
+    )
+    torch.manual_seed(0)
+    m7 = DeepJumpLite(tensor01_cfg, predict_heavy=True); m7.noise_sigma = 0.0
+    ddp7 = DDP(m7, find_unused_parameters=True)
+    _loss(ddp7(batch, tau=tau), batch).backward()
+    same7, total7, first_bad7 = _frac_synced(m7, world)
+    tensor_cloud01_synced = same7 == total7
+
     if rank == 0:
         ret["synced"] = bool(synced)
         ret["synced_frac"] = f"{same}/{total}"
@@ -167,6 +181,9 @@ def _worker(rank, world, ret):
         ret["tensor_qkv_synced"] = bool(tensor_qkv_synced)
         ret["tensor_qkv_synced_frac"] = f"{same6}/{total6}"
         ret["tensor_qkv_first_unsynced"] = first_bad6
+        ret["tensor_cloud01_synced"] = bool(tensor_cloud01_synced)
+        ret["tensor_cloud01_synced_frac"] = f"{same7}/{total7}"
+        ret["tensor_cloud01_first_unsynced"] = first_bad7
     dist.destroy_process_group()
 
 
@@ -189,4 +206,5 @@ if __name__ == "__main__":
     ok = (res.get("synced") and res.get("unwrapped_differs")
           and res.get("unroll_synced") and res.get("vector_qk_synced"))
     ok = ok and res.get("paper_ff_synced") and res.get("tensor_qkv_synced")
+    ok = ok and res.get("tensor_cloud01_synced")
     sys.exit(0 if ok else 1)

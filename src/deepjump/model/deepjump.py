@@ -29,6 +29,14 @@ class DeepJumpLite(nn.Module):
         self.predict_heavy = predict_heavy
         self.input_aug_sigma = getattr(cfg, "input_aug_sigma", 0.0)
         self.source_noise_v = getattr(cfg, "source_noise_v", False)
+        tensor_cloud01 = getattr(cfg, "tensor_cloud01", False)
+        if tensor_cloud01 and any(
+            getattr(cfg, name, False) for name in ("vector_qk", "tensor_qkv", "paper_ff")
+        ):
+            raise ValueError(
+                "tensor_cloud01 is a dedicated path and cannot be combined with "
+                "vector_qk, tensor_qkv, or paper_ff"
+            )
         common = dict(
             hidden=cfg.hidden,
             vec_channels=cfg.vector_channels,
@@ -39,6 +47,7 @@ class DeepJumpLite(nn.Module):
             vector_qk=getattr(cfg, "vector_qk", False),
             tensor_qkv=getattr(cfg, "tensor_qkv", False),
             paper_ff=getattr(cfg, "paper_ff", False),
+            tensor_cloud01=tensor_cloud01,
         )
         self.conditioner = Conditioner(num_layers=cfg.cond_layers, **common)
         self.transport = Transport(

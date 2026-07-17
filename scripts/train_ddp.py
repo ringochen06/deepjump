@@ -196,9 +196,15 @@ def main():
         heavy_unused = cfg.model.predict_heavy and cfg.train.w_offset == 0 and cfg.train.w_allatom == 0
         # PaperFeedForward's branched scalar/vector graph requires the reducer's
         # graph traversal on current PyTorch/NCCL; without it a real two-rank
-        # regression shows only 8/70 parameter gradients synchronized.
-        find_unused = (cfg.train.w_unroll > 0 or heavy_unused
-                       or getattr(cfg.model, "paper_ff", False))
+        # regression shows only 8/70 parameter gradients synchronized. The final
+        # TensorCloud01 transport FF scalar projection is structurally unused
+        # because the transport head consumes vectors only.
+        find_unused = (
+            cfg.train.w_unroll > 0
+            or heavy_unused
+            or getattr(cfg.model, "paper_ff", False)
+            or getattr(cfg.model, "tensor_cloud01", False)
+        )
         model = DDP(model, device_ids=[local], find_unused_parameters=find_unused)
     core = model.module if hasattr(model, "module") else model
     opt = torch.optim.Adam(model.parameters(), lr=cfg.train.lr)

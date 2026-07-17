@@ -12,6 +12,7 @@ import torch.nn as nn
 from ..atom_constants import MAX_HEAVY
 from .embeddings import DeltaEmbedding, ResidueEmbedding
 from .layers import EquivBlock, EquivLinear
+from .tensor_cloud01 import TensorCloud01Block
 
 
 class Conditioner(nn.Module):
@@ -27,20 +28,31 @@ class Conditioner(nn.Module):
         vector_qk: bool = False,
         tensor_qkv: bool = False,
         paper_ff: bool = False,
+        tensor_cloud01: bool = False,
     ):
         super().__init__()
         self.res_embed = ResidueEmbedding(hidden)
         self.delta_embed = DeltaEmbedding(hidden)
         self.vec_in = EquivLinear(MAX_HEAVY, vec_channels)
-        self.blocks = nn.ModuleList(
-            EquivBlock(
-                hidden, vec_channels, num_heads, seq_ks, num_dist_basis, dist_cutoff,
-                vector_qk=vector_qk,
-                tensor_qkv=tensor_qkv,
-                paper_ff=paper_ff,
+        if tensor_cloud01:
+            if vec_channels != hidden:
+                raise ValueError("tensor_cloud01 requires vector_channels == hidden")
+            self.blocks = nn.ModuleList(
+                TensorCloud01Block(
+                    hidden, num_heads, seq_ks, num_dist_basis, dist_cutoff
+                )
+                for _ in range(num_layers)
             )
-            for _ in range(num_layers)
-        )
+        else:
+            self.blocks = nn.ModuleList(
+                EquivBlock(
+                    hidden, vec_channels, num_heads, seq_ks, num_dist_basis, dist_cutoff,
+                    vector_qk=vector_qk,
+                    tensor_qkv=tensor_qkv,
+                    paper_ff=paper_ff,
+                )
+                for _ in range(num_layers)
+            )
 
     def forward(self, P_t, V_t, res_index, delta_ns, residue_mask):
         s = self.res_embed(res_index) + self.delta_embed(delta_ns)[:, None, :]
