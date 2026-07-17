@@ -1,0 +1,111 @@
+#!/usr/bin/env python
+"""Fail-closed validation for a bounded DDP training checkpoint and history."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+from pathlib import Path
+
+import torch
+
+
+def validate_checkpoint(
+    checkpoint_path: Path,
+    expected_step: int,
+    expected_world_size: int,
+    history_path: Path,
+) -> tuple[dict, list[str]]:
+    errors: list[str] = []
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+    if checkpoint.get("step") != expected_step:
+        errors.append(f"checkpoint step {checkpoint.get('step')} != {expected_step}")
+    if checkpoint.get("checkpoint_schema") != 2:
+        errors.append(f"checkpoint schema {checkpoint.get('checkpoint_schema')} != 2")
+
+    train_state = checkpoint.get("train_state") or {}
+    if train_state.get("world_size") != expected_world_size:
+        errors.append(
+            f"checkpoint world_size {train_state.get('world_size')} != {expected_world_size}"
+        )
+
+    model_state = checkpoint.get("model")
+    if not isinstance(model_state, dict) or not model_state:
+        errors.append("checkpoint model state is missing or empty")
+        nonfinite_parameters = []
+    else:
+        nonfinite_parameters = [
+            name
+            for name, value in model_state.items()
+            if torch.is_tensor(value) and not torch.isfinite(value).all()
+        ]
+        if nonfinite_parameters:
+            errors.append(f"non-finite model tensors: {nonfinite_parameters[:5]}")
+
+    history = json.loads(history_path.read_text())
+    if not isinstance(history, list) or not history:
+        errors.append("history is missing its final validation record")
+        final_history = {}
+    else:
+        final_history = history[-1]
+        if final_history.get("step") != expected_step:
+            errors.append(f"history step {final_history.get('step')} != {expected_step}")
+        for name in ("val_loss", "val_rmsd", "noop_rmsd"):
+            value = final_history.get(name)
+            if not isinstance(value, (int, float)) or not math.isfinite(value):
+                errors.append(f"history {name} is not finite: {value!r}")
+
+    report = {
+        "checkpoint": str(checkpoint_path),
+        "checkpoint_step": checkpoint.get("step"),
+        "checkpoint_schema": checkpoint.get("checkpoint_schema"),
+        "world_size": train_state.get("world_size"),
+        "model_tensors": len(model_state) if isinstance(model_state, dict) else 0,
+        "nonfinite_model_tensors": nonfinite_parameters,
+        "history": final_history,
+        "status": "PASS" if not errors else "FAIL",
+        "errors": errors,
+    }
+    return report, errors
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint", required=True, type=Path)
+    parser.add_argument("--history", required=True, type=Path)
+    parser.add_argument("--expected-step", required=True, type=int)
+    parser.add_argument("--expected-world-size", required=True, type=int)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+
+    try:
+        report, errors = validate_checkpoint(
+            args.checkpoint,
+            args.expected_step,
+            args.expected_world_size,
+            args.history,
+        )
+    except Exception as exc:  # noqa: BLE001 - convert corrupt artifacts into a gate failure
+        report = {
+            "checkpoint": str(args.checkpoint),
+            "status": "FAIL",
+            "errors": [f"checkpoint readback failed: {exc}"],
+        }
+        errors = report["errors"]
+
+    rendered = json.dumps(report, indent=2)
+    print(rendered)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered + "\n")
+    if errors:
+        for error in errors:
+            print(f"ERROR: {error}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

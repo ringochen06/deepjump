@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -342,6 +343,18 @@ def main():
             scaler.unscale_(opt)
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.train.grad_clip)
         grad_norm_value = float(grad_norm)
+        finite_step = torch.tensor(
+            int(math.isfinite(loss_val) and math.isfinite(grad_norm_value)),
+            device=device,
+            dtype=torch.int32,
+        )
+        if world > 1:
+            dist.all_reduce(finite_step, op=dist.ReduceOp.MIN)
+        if not finite_step.item():
+            raise FloatingPointError(
+                f"non-finite loss or gradient at step {step + 1}: "
+                f"rank={rank} loss={loss_val} grad={grad_norm_value}"
+            )
         clip_count_window += int(grad_norm_value > cfg.train.grad_clip)
         scale_before = scaler.get_scale() if use_scaler else 1.0
         scaler.step(opt); scaler.update()
@@ -349,20 +362,34 @@ def main():
         scaler_skips_window += int(scale_after < scale_before)
         step += 1
 
+        if step % cfg.train.log_every == 0:
+            local_peak = (
+                torch.cuda.max_memory_allocated() / 1e9
+                if torch.cuda.is_available() else 0.0
+            )
+            peak_tensor = torch.tensor(local_peak, device=device, dtype=torch.float64)
+            if world > 1:
+                gathered_peaks = [torch.zeros_like(peak_tensor) for _ in range(world)]
+                dist.all_gather(gathered_peaks, peak_tensor)
+                peak_by_rank = [float(value) for value in gathered_peaks]
+            else:
+                peak_by_rank = [local_peak]
         if is_main(rank) and step % cfg.train.log_every == 0:
             elapsed = time.time() - t0
             rate = cfg.train.log_every / elapsed
             data_pct = 100 * data_wait / elapsed if elapsed > 0 else 0
-            # peakGPU = cumulative peak allocated over the WHOLE run (max_memory_allocated is
-            # never reset), i.e. the high-water mark that decides if crop/batch fits 16 GB.
-            mem = torch.cuda.max_memory_allocated() / 1e9 if torch.cuda.is_available() else 0.0
+            # Cumulative high-water mark on every rank; max_memory_allocated is
+            # deliberately never reset. This proves that every GPU fits, rather
+            # than reporting only rank 0 and assuming the others are equivalent.
+            peak_text = ",".join(f"{value:.1f}" for value in peak_by_rank)
             t0 = time.time(); data_wait = 0.0
             comp_text = " ".join(f"{name}={value:.4f}" for name, value in sorted(comp_sums.items()))
             print(f"step {step:>7}/{cfg.train.max_steps}  loss {loss_val:.4f}  "
                   f"lr {opt.param_groups[0]['lr']:.2e}  {rate:.2f} it/s  "
                   f"{1000/rate:.0f} ms/step  grad {grad_norm_value:.3f}  "
                   f"clip {clip_count_window}/{cfg.train.log_every}  "
-                  f"scaler_skips {scaler_skips_window}  peakGPU(cum) {mem:.1f}GB  "
+                  f"scaler_skips {scaler_skips_window}  "
+                  f"peakGPU_by_rank(cum) [{peak_text}]GB  "
                   f"data {data_pct:.0f}%  {comp_text}")
             clip_count_window = 0
             scaler_skips_window = 0

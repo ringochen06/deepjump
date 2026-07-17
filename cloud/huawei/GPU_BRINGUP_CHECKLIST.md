@@ -164,3 +164,30 @@ CONFIG=configs/v100_ddp_calibration.yaml bash cloud/huawei/run_ddp.sh
 
 Only after calibration review may formal training be proposed. Formal training always requires a
 separate explicit approval.
+
+## TensorCloud01 bounded preflight
+
+For the dedicated TensorCloud01 architecture, use the fail-closed wrapper below instead of manually
+chaining the one-domain and DDP gates. It verifies the reviewed commit and hostname, re-runs the
+frozen-data audit, requires measurable one-batch learning, runs only the ten-step eight-GPU smoke,
+validates the atomic checkpoint locally and after OBS readback, and requests shutdown on every exit
+path. It refuses to overwrite earlier run directories and never starts calibration or formal
+training.
+
+Before running, record the live hourly price and expected maximum cost for the 45-minute envelope.
+Replace the placeholders with the authorized instance identity, reviewed deployed SHA, and OBS
+bucket; do not put credentials in this command or repository.
+
+```bash
+EXPECTED_HOSTNAME=<authorized-instance-hostname> \
+EXPECTED_REPO_COMMIT=<reviewed-full-sha> \
+BUCKET=obs://deepjump-mdcath-cn4-ringochen \
+SHUTDOWN_ON_EXIT=1 \
+HARD_STOP_MINUTES=45 \
+bash cloud/huawei/run_tensorcloud01_preflight.sh
+```
+
+Recovery is fail-closed: inspect the unique `runs/tensorcloud01_preflight_<RUN_ID>/preflight.log`
+and matching OBS audit prefix, preserve failed artifacts, move or rename the fixed overfit/smoke
+directories, and launch a fresh `RUN_ID` only after correcting the diagnosed cause. Do not resume a
+ten-step engineering smoke, and do not delete failed checkpoints before their evidence is recorded.
