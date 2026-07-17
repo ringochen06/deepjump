@@ -212,5 +212,27 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     assert tensorcloud01_lowlr.train.warmup_steps == 0
     assert tensorcloud01_lowlr.train.max_steps == 30
     assert tensorcloud01_lowlr.train.lr == tensorcloud01_lowlr.train.lr_final == 5e-4
+    calibrations = [
+        load_config("configs/v100_tensorcloud01_d1_calibration.yaml"),
+        load_config("configs/v100_tensorcloud01_d10_calibration.yaml"),
+        load_config("configs/v100_tensorcloud01_d100_calibration.yaml"),
+    ]
+    for calibration, expected_delta in zip(calibrations, (1, 10, 100), strict=True):
+        calibration_data = asdict(calibration.data)
+        smoke_data = asdict(tensorcloud01_smoke.data)
+        calibration_data.pop("delta_frames")
+        smoke_data.pop("delta_frames")
+        assert calibration_data == smoke_data
+        assert asdict(calibration.model) == asdict(tensorcloud01_smoke.model)
+        assert calibration.data.delta_frames == expected_delta
+        assert calibration.train.batch_size * 8 * calibration.train.grad_accum == 128
+        assert calibration.train.max_steps == 1000
+        assert calibration.train.warmup_steps == 200
+        assert calibration.train.lr == 5e-3
+        assert calibration.train.lr_final == 3e-3
+        assert calibration.train.val_every == calibration.train.ckpt_every == 250
+        assert calibration.train.keep_last_k == 4
+        assert calibration.train.amp and calibration.train.amp_dtype == "fp16"
+        assert calibration.train.out_dir.endswith(f"d{expected_delta}_calibration")
     assert unroll5.train.batch_size * 8 * unroll5.train.grad_accum == 128
     assert unroll5.train.max_steps == 500
