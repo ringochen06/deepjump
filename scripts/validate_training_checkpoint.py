@@ -18,6 +18,8 @@ def validate_checkpoint(
     expected_world_size: int,
     history_path: Path,
     history_mode: str = "final",
+    expected_delta: int | None = None,
+    require_vector_only: bool = False,
 ) -> tuple[dict, list[str]]:
     errors: list[str] = []
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -32,6 +34,19 @@ def validate_checkpoint(
         errors.append(
             f"checkpoint world_size {train_state.get('world_size')} != {expected_world_size}"
         )
+
+    config = checkpoint.get("cfg") or {}
+    data_config = config.get("data") or {}
+    model_config = config.get("model") or {}
+    if expected_delta is not None and data_config.get("delta_frames") != expected_delta:
+        errors.append(
+            f"checkpoint delta_frames {data_config.get('delta_frames')} != {expected_delta}"
+        )
+    if require_vector_only:
+        if model_config.get("tensor_cloud01") is not True:
+            errors.append("checkpoint is not the reviewed TensorCloud01 architecture")
+        if model_config.get("tensor_cloud01_vector_only_attention") is not True:
+            errors.append("checkpoint is not the reviewed vector-only attention candidate")
 
     model_state = checkpoint.get("model")
     if not isinstance(model_state, dict) or not model_state:
@@ -74,6 +89,10 @@ def validate_checkpoint(
         "checkpoint_step": checkpoint.get("step"),
         "checkpoint_schema": checkpoint.get("checkpoint_schema"),
         "world_size": train_state.get("world_size"),
+        "delta_frames": data_config.get("delta_frames"),
+        "vector_only_attention": bool(
+            model_config.get("tensor_cloud01_vector_only_attention", False)
+        ),
         "model_tensors": len(model_state) if isinstance(model_state, dict) else 0,
         "nonfinite_model_tensors": nonfinite_parameters,
         "history": selected_history,
@@ -91,6 +110,8 @@ def main() -> None:
     parser.add_argument("--expected-step", required=True, type=int)
     parser.add_argument("--expected-world-size", required=True, type=int)
     parser.add_argument("--history-mode", choices=("final", "contains"), default="final")
+    parser.add_argument("--expected-delta", type=int)
+    parser.add_argument("--require-vector-only", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
@@ -101,6 +122,8 @@ def main() -> None:
             args.expected_world_size,
             args.history,
             args.history_mode,
+            args.expected_delta,
+            args.require_vector_only,
         )
     except Exception as exc:  # noqa: BLE001 - convert corrupt artifacts into a gate failure
         report = {

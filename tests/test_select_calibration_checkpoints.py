@@ -17,13 +17,18 @@ def _history():
 def _config():
     return {
         "data": {"delta_frames": 1},
-        "model": {"tensor_cloud01": True},
+        "model": {
+            "tensor_cloud01": True,
+            "tensor_cloud01_vector_only_attention": True,
+        },
         "train": {"max_steps": 1000},
     }
 
 
 def test_selects_two_lowest_losses_with_earlier_tie_break():
-    result = select_checkpoints(_history(), _config(), expected_delta=1)
+    result = select_checkpoints(
+        _history(), _config(), expected_delta=1, require_vector_only=True
+    )
     assert result["ranked_steps"] == [750, 1000, 500, 250]
     assert [row["step"] for row in result["selected"]] == [750, 1000]
     assert result["scientific_metrics_used_for_selection"] is False
@@ -51,3 +56,9 @@ def test_rejects_wrong_calibration_identity():
     wrong["model"]["tensor_cloud01"] = False
     with pytest.raises(ValueError, match="TensorCloud01"):
         select_checkpoints(_history(), wrong, expected_delta=1)
+    wrong = copy.deepcopy(_config())
+    wrong["model"]["tensor_cloud01_vector_only_attention"] = False
+    with pytest.raises(ValueError, match="vector-only"):
+        select_checkpoints(
+            _history(), wrong, expected_delta=1, require_vector_only=True
+        )
