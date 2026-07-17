@@ -24,11 +24,6 @@ OBS_DST="$BUCKET/deepjump-evaluation/tensorcloud01-integration/$RUN_ID"
 
 [[ "$SHUTDOWN_ON_EXIT" == 1 ]] || { printf 'SHUTDOWN_ON_EXIT must be 1\n' >&2; exit 2; }
 [[ "$HARD_STOP_MINUTES" == 30 ]] || { printf 'HARD_STOP_MINUTES must be 30\n' >&2; exit 2; }
-[[ "$EXPECTED_CHECKPOINT_STEP" =~ ^(30|250|500|750|1000)$ ]] || {
-  printf 'unsupported checkpoint step\n' >&2
-  exit 2
-}
-[[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]] || { printf 'hostname mismatch\n' >&2; exit 2; }
 
 shutdown_on_exit() {
   code=$?
@@ -40,6 +35,7 @@ shutdown_on_exit() {
     set -e
   fi
   printf 'evaluation integration exit=%s; requesting shutdown at %s\n' "$code" "$(date -Is)"
+  sudo -n shutdown -c 2>/dev/null || true
   sudo -n shutdown -h now || shutdown_code=$?
   if [[ "$shutdown_code" != 0 ]]; then
     printf 'ERROR: shutdown command failed with exit=%s\n' "$shutdown_code" >&2
@@ -49,6 +45,12 @@ shutdown_on_exit() {
 }
 trap shutdown_on_exit EXIT
 sudo -n shutdown -h "+$HARD_STOP_MINUTES"
+
+[[ "$EXPECTED_CHECKPOINT_STEP" =~ ^(30|250|500|750|1000)$ ]] || {
+  printf 'unsupported checkpoint step\n' >&2
+  exit 2
+}
+[[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]] || { printf 'hostname mismatch\n' >&2; exit 2; }
 
 cd "$REPO"
 [[ ! -e "$RUN_DIR" ]] || { printf 'refusing to overwrite %s\n' "$RUN_DIR" >&2; exit 2; }

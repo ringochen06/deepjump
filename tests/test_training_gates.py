@@ -263,6 +263,10 @@ def test_tensorcloud01_eval_integration_runner_is_bounded_and_pins_source():
     assert runner.index('sudo -n shutdown -h "+$HARD_STOP_MINUTES"') < runner.index(
         'cd "$REPO"'
     )
+    assert runner.index('trap shutdown_on_exit EXIT') < runner.index(
+        '[[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]]'
+    )
+    assert 'sudo -n shutdown -c 2>/dev/null || true' in runner
     assert 'sudo -n shutdown -h now || shutdown_code=$?' in runner
     assert '[[ "$code" != 0 ]] || code=$shutdown_code' in runner
     assert "conflicting training/evaluation process exists" in runner
