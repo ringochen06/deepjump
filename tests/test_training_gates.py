@@ -276,3 +276,25 @@ def test_tensorcloud01_eval_integration_runner_is_bounded_and_pins_source():
     assert "sha256sum -c SHA256SUMS" in runner
     assert '"scope":"integration_only"' in runner
     assert "scientific calibration/training was not started" in runner
+
+
+def test_vector_only_sampling_discriminator_is_bounded_and_inference_only():
+    runner = Path("cloud/huawei/run_vector_only_sampling_discriminator.sh").read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-10}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 10 ]]' in runner
+    assert runner.index('trap shutdown_on_exit EXIT') < runner.index(
+        '[[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]]'
+    )
+    assert 'sudo -n shutdown -c 2>/dev/null || true' in runner
+    assert 'sudo -n shutdown -h now || shutdown_code=$?' in runner
+    assert "conflicting training/evaluation process exists" in runner
+    assert "--domains 1 --starts 1 --steps 20" in runner
+    assert "--methods mean,ode_1,ode_5,ode_20" in runner
+    assert 'for anchor in state conditioner' in runner
+    assert '--drift-anchor "$anchor"' in runner
+    assert '"scope": "inference_mechanism_probe_only"' in runner
+    assert "sha256sum -c SHA256SUMS" in runner
+    assert '"$PYTHON" scripts/train_ddp.py' not in runner
+    assert "--warm-start" not in runner
+    assert "no training or scientific gate was run" in runner
