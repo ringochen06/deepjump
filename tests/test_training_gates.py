@@ -253,3 +253,22 @@ def test_vector_only_numerics_discriminator_is_bounded_and_two_arm_scoped():
     assert "sha256sum -c" in runner
     assert "formal training was not started" in runner
     assert "--warm-start" not in runner
+
+
+def test_tensorcloud01_eval_integration_runner_is_bounded_and_pins_source():
+    runner = Path("cloud/huawei/run_tensorcloud01_eval_integration.sh").read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-30}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 30 ]]' in runner
+    assert runner.index('sudo -n shutdown -h "+$HARD_STOP_MINUTES"') < runner.index(
+        'cd "$REPO"'
+    )
+    assert 'sudo -n shutdown -h now || shutdown_code=$?' in runner
+    assert '[[ "$code" != 0 ]] || code=$shutdown_code' in runner
+    assert "conflicting training/evaluation process exists" in runner
+    assert "--domains 1 --starts 1 --draws 2 --methods mean" in runner
+    assert "--domains 1 --starts 1 --steps \"$steps\" --methods mean" in runner
+    assert "--expected-domains 1" in runner
+    assert "sha256sum -c SHA256SUMS" in runner
+    assert '"scope":"integration_only"' in runner
+    assert "scientific calibration/training was not started" in runner

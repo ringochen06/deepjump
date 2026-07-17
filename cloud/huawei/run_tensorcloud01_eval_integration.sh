@@ -6,6 +6,7 @@ set -euo pipefail
 
 REPO=${REPO:-/data/deepjump}
 PYTHON=${PYTHON:-/data/venvs/deepjump/bin/python}
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 CHECKPOINT=${CHECKPOINT:?set CHECKPOINT to the reviewed TensorCloud01 checkpoint}
 EXPECTED_CHECKPOINT_SHA256=${EXPECTED_CHECKPOINT_SHA256:?set the reviewed checkpoint SHA256}
 EXPECTED_CHECKPOINT_STEP=${EXPECTED_CHECKPOINT_STEP:?set the reviewed checkpoint step}
@@ -31,6 +32,7 @@ OBS_DST="$BUCKET/deepjump-evaluation/tensorcloud01-integration/$RUN_ID"
 
 shutdown_on_exit() {
   code=$?
+  shutdown_code=0
   trap - EXIT
   if [[ "$code" != 0 ]] && command -v obsutil >/dev/null; then
     set +e
@@ -38,7 +40,11 @@ shutdown_on_exit() {
     set -e
   fi
   printf 'evaluation integration exit=%s; requesting shutdown at %s\n' "$code" "$(date -Is)"
-  sudo -n shutdown -h now || printf 'ERROR: shutdown command failed\n' >&2
+  sudo -n shutdown -h now || shutdown_code=$?
+  if [[ "$shutdown_code" != 0 ]]; then
+    printf 'ERROR: shutdown command failed with exit=%s\n' "$shutdown_code" >&2
+    [[ "$code" != 0 ]] || code=$shutdown_code
+  fi
   exit "$code"
 }
 trap shutdown_on_exit EXIT
@@ -61,6 +67,10 @@ actual_checkpoint_sha=$(sha256sum "$CHECKPOINT" | awk '{print $1}')
 }
 [[ "$(nvidia-smi -L | wc -l | tr -d ' ')" == 8 ]] || { printf 'GPU count != 8\n' >&2; exit 2; }
 command -v obsutil >/dev/null
+if pgrep -af '[s]cripts/(train_ddp|transition_robustness_eval|geometry_robustness_eval).py'; then
+  printf 'conflicting training/evaluation process exists\n' >&2
+  exit 2
+fi
 
 "$PYTHON" -m pytest -q \
   tests/test_evaluation_protocol.py \
