@@ -190,7 +190,10 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     assert not tensorcloud01_smoke.model.vector_qk
     assert not tensorcloud01_smoke.model.tensor_qkv
     assert not tensorcloud01_smoke.model.paper_ff
-    assert tensorcloud01_smoke.train.max_steps == 10
+    assert tensorcloud01_smoke.train.max_steps == 30
+    assert tensorcloud01_smoke.train.warmup_steps == 20
+    assert tensorcloud01_smoke.train.val_every == 30
+    assert tensorcloud01_smoke.train.ckpt_every == 30
     assert tensorcloud01_smoke.train.batch_size * 8 * tensorcloud01_smoke.train.grad_accum == 128
     assert tensorcloud01_smoke.train.amp_dtype == "fp16"
     assert tensorcloud01_smoke.train.lr == tensorcloud01_smoke.train.lr_final == 5e-3

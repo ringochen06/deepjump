@@ -123,15 +123,15 @@ awk -F, '{
   for (i = 1; i <= NF; i++) if ($i <= 0 || $i >= 16.0) exit 1
 }' <<<"$peak_csv"
 "$PYTHON" scripts/validate_training_checkpoint.py \
-  --checkpoint "$SMOKE_DIR/ckpt_10.pt" \
+  --checkpoint "$SMOKE_DIR/ckpt_30.pt" \
   --history "$SMOKE_DIR/history.json" \
-  --expected-step 10 \
+  --expected-step 30 \
   --expected-world-size 8 \
   --output "$RUN_DIR/local_checkpoint_gate.json"
 "$PYTHON" scripts/validate_training_checkpoint.py \
   --checkpoint "$SMOKE_DIR/last.ckpt" \
   --history "$SMOKE_DIR/history.json" \
-  --expected-step 10 \
+  --expected-step 30 \
   --expected-world-size 8 \
   --output "$RUN_DIR/local_last_checkpoint_gate.json"
 
@@ -140,7 +140,7 @@ timeout --signal=TERM --kill-after=2m 5m \
   "$TORCHRUN" --standalone --nproc_per_node=8 \
   scripts/train_ddp.py --config "$SMOKE_CONFIG" --resume "$SMOKE_DIR/last.ckpt" \
   2>&1 | tee "$RUN_DIR/resume_readback.log"
-grep -q 'resumed from .*last.ckpt at step 10' "$RUN_DIR/resume_readback.log"
+grep -q 'resumed from .*last.ckpt at step 30' "$RUN_DIR/resume_readback.log"
 
 printf 'gate=obs_archive_and_readback start=%s\n' "$(date -Is)"
 obsutil sync "$OVERFIT_DIR" "$OBS_DST/overfit"
@@ -149,19 +149,19 @@ obsutil sync "$RUN_DIR" "$OBS_DST/audit"
 mkdir "$READBACK_DIR"
 obsutil sync "$OBS_DST/smoke" "$READBACK_DIR"
 "$PYTHON" scripts/validate_training_checkpoint.py \
-  --checkpoint "$READBACK_DIR/ckpt_10.pt" \
+  --checkpoint "$READBACK_DIR/ckpt_30.pt" \
   --history "$READBACK_DIR/history.json" \
-  --expected-step 10 \
+  --expected-step 30 \
   --expected-world-size 8 \
   --output "$RUN_DIR/obs_checkpoint_gate.json"
 "$PYTHON" scripts/validate_training_checkpoint.py \
   --checkpoint "$READBACK_DIR/last.ckpt" \
   --history "$READBACK_DIR/history.json" \
-  --expected-step 10 \
+  --expected-step 30 \
   --expected-world-size 8 \
   --output "$RUN_DIR/obs_last_checkpoint_gate.json"
-local_sha=$(sha256sum "$SMOKE_DIR/ckpt_10.pt" | awk '{print $1}')
-readback_sha=$(sha256sum "$READBACK_DIR/ckpt_10.pt" | awk '{print $1}')
+local_sha=$(sha256sum "$SMOKE_DIR/ckpt_30.pt" | awk '{print $1}')
+readback_sha=$(sha256sum "$READBACK_DIR/ckpt_30.pt" | awk '{print $1}')
 [[ "$local_sha" == "$readback_sha" ]] || {
   printf 'OBS checkpoint SHA256 mismatch: local=%s readback=%s\n' \
     "$local_sha" "$readback_sha" >&2
