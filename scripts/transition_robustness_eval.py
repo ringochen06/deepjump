@@ -14,11 +14,13 @@ from deepjump.config import ModelConfig
 from deepjump.data import discover_domains
 from deepjump.data.mdcath import _DomainHandle
 from deepjump.evaluation import (
+    aggregate_complete_trajectory_grid,
     assign_clusters,
     fit_kmeans,
     load_frozen_domain_ids,
     paired_domain_bootstrap_gain,
     reference_transition_deltas,
+    require_mdcath_full_grid,
     require_single_delta,
     resolve_frozen_domains,
     transition_matrix,
@@ -69,6 +71,193 @@ def repeat_batch(batch: dict[str, torch.Tensor], count: int) -> dict[str, torch.
     return {key: value.repeat(count, *([1] * (value.ndim - 1))) for key, value in batch.items()}
 
 
+def crossfit_reference_replica(replica: int, replicas: list[int]) -> int:
+    """Choose a deterministic different replica for TICA/MSM fitting."""
+    replicas = [int(value) for value in replicas]
+    if len(replicas) < 2 or len(set(replicas)) != len(replicas):
+        raise ValueError("cross-fit evaluation requires at least two unique replicas")
+    try:
+        index = replicas.index(int(replica))
+    except ValueError as exc:
+        raise ValueError(f"evaluation replica {replica} is not in the configured grid") from exc
+    return replicas[(index + 1) % len(replicas)]
+
+
+def _trajectory_features(handle, layout, temperature, replica, frame_ids, residue_slice, pairs):
+    features = []
+    for frame in frame_ids:
+        coordinates = torch.from_numpy(
+            np.asarray(handle.coords(temperature, replica, int(frame)))
+        )
+        positions, _ = apply_layout(coordinates, layout)
+        positions = positions[residue_slice]
+        positions = positions - positions.mean(0, keepdim=True)
+        features.append(pairdist_features(positions, pairs))
+    return np.stack(features)
+
+
+def _evaluate_cell(
+    handle,
+    layout,
+    model,
+    device,
+    data_cfg,
+    delta,
+    methods,
+    replicas,
+    args,
+    *,
+    temperature,
+    replica,
+    seed_offset,
+):
+    reference_replica = crossfit_reference_replica(replica, replicas)
+    reference_available = handle.replicas(temperature, [reference_replica])
+    evaluation_available = handle.replicas(temperature, [replica])
+    if len(reference_available) != 1 or len(evaluation_available) != 1:
+        raise ValueError(
+            f"missing cross-fit trajectory {handle.name}/{temperature}: "
+            f"fit={reference_replica} eval={replica}"
+        )
+    reference_frames = reference_available[0][2]
+    evaluation_frames = evaluation_available[0][2]
+    n = min(layout.num_residues, int(data_cfg["crop_length"]))
+    offset = max(0, (layout.num_residues - n) // 2)
+    residue_slice = slice(offset, offset + n)
+    pairs = selected_pair_indices(n, args.max_features)
+
+    fit_frame_ids = contiguous_frame_ids(reference_frames, args.real_frames)
+    real_features = _trajectory_features(
+        handle, layout, temperature, reference_replica,
+        fit_frame_ids, residue_slice, pairs,
+    )
+    feature_mean, projection = fit_tica(
+        real_features, lag=args.lag, n_components=args.tica_components
+    )
+    real_tic = (real_features - feature_mean) @ projection
+    reference_delta = reference_transition_deltas(real_tic, delta)
+    self_floor = energy_distance(reference_delta[::2], reference_delta[1::2])
+    cluster_centers, real_cluster_labels = fit_kmeans(
+        real_tic, args.clusters, seed=args.seed + seed_offset
+    )
+    one_step_msm, _ = transition_matrix(
+        real_cluster_labels,
+        n_states=args.clusters,
+        lag=args.msm_lag,
+        pseudocount=args.msm_pseudocount,
+    )
+    target_msm = np.linalg.matrix_power(one_step_msm, delta // args.msm_lag)
+
+    evaluation_frame_ids = contiguous_frame_ids(evaluation_frames, args.real_frames)
+    possible = evaluation_frame_ids[:-delta]
+    if len(possible) == 0:
+        raise ValueError(
+            f"no t->t+delta starts for {handle.name}/{temperature}/{replica}"
+        )
+    starts = possible[
+        np.linspace(0, len(possible) - 1, min(args.starts, len(possible)), dtype=int)
+    ]
+    scores = {"noop": []} | {method: [] for method in methods}
+    predicted_delta = {"noop": []} | {method: [] for method in methods}
+    transition_origins = []
+    transition_destinations = {"noop": []} | {method: [] for method in methods}
+
+    for start_index, frame in enumerate(starts):
+        coordinates0 = torch.from_numpy(
+            np.asarray(handle.coords(temperature, replica, int(frame)))
+        )
+        coordinates1 = torch.from_numpy(
+            np.asarray(handle.coords(temperature, replica, int(frame + delta)))
+        )
+        positions0, velocities0 = apply_layout(coordinates0, layout)
+        positions1, _ = apply_layout(coordinates1, layout)
+        positions0 = positions0[residue_slice]
+        velocities0 = velocities0[residue_slice]
+        positions1 = positions1[residue_slice]
+        positions0 = positions0 - positions0.mean(0, keepdim=True)
+        positions1 = positions1 - positions1.mean(0, keepdim=True)
+        tic0 = (pairdist_features(positions0, pairs) - feature_mean) @ projection
+        tic1 = (pairdist_features(positions1, pairs) - feature_mean) @ projection
+        scores["noop"].append(energy_score(tic0[None], tic1))
+        predicted_delta["noop"].append(np.zeros((1, len(tic0))))
+        origin_cluster = int(assign_clusters(tic0[None], cluster_centers)[0])
+        transition_origins.extend([origin_cluster] * args.draws)
+        transition_destinations["noop"].extend([origin_cluster] * args.draws)
+
+        batch = {
+            "P_t": positions0[None].to(device),
+            "V_t": velocities0[None].to(device),
+            "res_index": torch.as_tensor(
+                layout.res_index[residue_slice], device=device
+            )[None],
+            "bond_mask": torch.as_tensor(
+                layout.bond_mask[residue_slice.start:residue_slice.stop - 1],
+                device=device,
+            )[None],
+            "delta_ns": torch.tensor([float(delta)], device=device),
+            "residue_mask": torch.ones(1, n, dtype=torch.bool, device=device),
+            "atom_mask": torch.as_tensor(
+                layout.atom_mask[residue_slice], device=device
+            )[None],
+        }
+        expanded = repeat_batch(batch, args.draws)
+        for method_index, method in enumerate(methods):
+            if method == "mean":
+                prediction, _ = model.sample(expanded, mode="mean")
+            else:
+                ode_steps = int(method.split("_", 1)[1])
+                generator = torch.Generator().manual_seed(
+                    args.seed + seed_offset * 10000 + start_index * 100 + method_index
+                )
+                prediction, _ = model.sample(
+                    expanded, mode="ode", steps=ode_steps, generator=generator
+                )
+            predicted_tic = (
+                pairdist_features(prediction, pairs) - feature_mean
+            ) @ projection
+            scores[method].append(energy_score(predicted_tic, tic1))
+            predicted_delta[method].append(predicted_tic - tic0[None])
+            transition_destinations[method].extend(
+                assign_clusters(predicted_tic, cluster_centers).tolist()
+            )
+
+    cell_methods = {}
+    for method in ["noop", *methods]:
+        predicted_increment = np.concatenate(predicted_delta[method])
+        predicted_msm, origin_counts = transition_matrix(
+            np.asarray(transition_origins),
+            np.asarray(transition_destinations[method]),
+            n_states=args.clusters,
+            pseudocount=args.msm_pseudocount,
+        )
+        row_jsd, row_values = weighted_row_jsd_bits(
+            target_msm, predicted_msm, origin_counts
+        )
+        cell_methods[method] = {
+            "mean_energy_score": float(np.mean(scores[method])),
+            "median_energy_score": float(np.median(scores[method])),
+            "transition_energy_distance": energy_distance(
+                reference_delta, predicted_increment
+            ),
+            "msm_row_jsd_bits": row_jsd,
+            "msm_observed_origin_states": int((origin_counts > 0).sum()),
+            "msm_max_observed_row_jsd_bits": float(
+                row_values[origin_counts > 0].max()
+            ),
+        }
+    return {
+        "temperature": temperature,
+        "replica": replica,
+        "reference_replica": reference_replica,
+        "evaluation_frames": evaluation_frames,
+        "reference_frames": len(reference_delta),
+        "starts": len(starts),
+        "draws": args.draws,
+        "self_energy_distance_floor": self_floor,
+        "methods": cell_methods,
+    }
+
+
 @torch.no_grad()
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -87,6 +276,10 @@ def main() -> None:
     ap.add_argument("--msm-lag", type=int, default=1)
     ap.add_argument("--msm-pseudocount", type=float, default=1e-8)
     ap.add_argument("--seed", type=int, default=20260717)
+    ap.add_argument(
+        "--allow-partial-grid", action="store_true",
+        help="Debug only: permit a non-5x5 checkpoint grid and label the output partial.",
+    )
     ap.add_argument(
         "--noise-sigma", type=float, default=None,
         help="Override checkpoint source-noise sigma for inference-only calibration.",
@@ -122,130 +315,66 @@ def main() -> None:
     methods = [m.strip() for m in args.methods.split(",") if m.strip()]
     if any(m != "mean" and not m.startswith("ode_") for m in methods):
         raise ValueError("methods must be mean or ode_N")
+    temperatures = [int(value) for value in cd["temperatures"]]
+    replicas = [int(value) for value in cd["replicas"]]
+    if not args.allow_partial_grid:
+        temperatures, replicas = require_mdcath_full_grid(temperatures, replicas)
+    if len(replicas) < 2:
+        raise ValueError("5x5 cross-fit transition evaluation requires at least two replicas")
     rows = []
 
+    metric_names = (
+        "mean_energy_score",
+        "transition_energy_distance",
+        "msm_row_jsd_bits",
+    )
     for domain_index, path in enumerate(chosen):
-        h = _DomainHandle(path)
-        layout = h.layout
-        temp, rep = cd["temperatures"][0], cd["replicas"][0]
-        nf = h.replicas(temp, [rep])[0][2]
-        n = min(layout.num_residues, int(cd["crop_length"]))
-        offset = max(0, (layout.num_residues - n) // 2)
-        residue_slice = slice(offset, offset + n)
-        pairs = selected_pair_indices(n, args.max_features)
-        frame_ids = contiguous_frame_ids(nf, args.real_frames)
-
-        real_features = []
-        for frame in frame_ids:
-            coords = torch.from_numpy(np.asarray(h.coords(temp, rep, int(frame))))
-            P, _ = apply_layout(coords, layout)
-            P = P[residue_slice]
-            P = P - P.mean(0, keepdim=True)
-            real_features.append(pairdist_features(P, pairs))
-        real_features = np.stack(real_features)
-        feature_mean, projection = fit_tica(
-            real_features, lag=args.lag, n_components=args.tica_components
-        )
-        real_tic = (real_features - feature_mean) @ projection
-        reference_delta = reference_transition_deltas(real_tic, delta)
-        self_floor = energy_distance(reference_delta[::2], reference_delta[1::2])
-        cluster_centers, real_cluster_labels = fit_kmeans(
-            real_tic, args.clusters, seed=args.seed + domain_index
-        )
-        one_step_msm, _ = transition_matrix(
-            real_cluster_labels,
-            n_states=args.clusters,
-            lag=args.msm_lag,
-            pseudocount=args.msm_pseudocount,
-        )
-        target_msm = np.linalg.matrix_power(one_step_msm, delta // args.msm_lag)
-
-        possible = frame_ids[:-delta]
-        starts = possible[np.linspace(0, len(possible) - 1, min(args.starts, len(possible)), dtype=int)]
-        scores = {"noop": []} | {m: [] for m in methods}
-        predicted_delta = {"noop": []} | {m: [] for m in methods}
-        transition_origins = []
-        transition_destinations = {"noop": []} | {m: [] for m in methods}
-
-        for start_index, frame in enumerate(starts):
-            coords0 = torch.from_numpy(np.asarray(h.coords(temp, rep, int(frame))))
-            coords1 = torch.from_numpy(np.asarray(h.coords(temp, rep, int(frame + delta))))
-            P0, V0 = apply_layout(coords0, layout)
-            P1, _ = apply_layout(coords1, layout)
-            P0, V0, P1 = P0[residue_slice], V0[residue_slice], P1[residue_slice]
-            P0 = P0 - P0.mean(0, keepdim=True)
-            P1 = P1 - P1.mean(0, keepdim=True)
-            tic0 = (pairdist_features(P0, pairs) - feature_mean) @ projection
-            tic1 = (pairdist_features(P1, pairs) - feature_mean) @ projection
-            scores["noop"].append(energy_score(tic0[None], tic1))
-            predicted_delta["noop"].append(np.zeros((1, len(tic0))))
-            origin_cluster = int(assign_clusters(tic0[None], cluster_centers)[0])
-            transition_origins.extend([origin_cluster] * args.draws)
-            transition_destinations["noop"].extend([origin_cluster] * args.draws)
-
-            batch = {
-                "P_t": P0[None].to(device),
-                "V_t": V0[None].to(device),
-                "res_index": torch.as_tensor(layout.res_index[residue_slice], device=device)[None],
-                "bond_mask": torch.as_tensor(
-                    layout.bond_mask[residue_slice.start:residue_slice.stop - 1], device=device
-                )[None],
-                "delta_ns": torch.tensor([float(delta)], device=device),
-                "residue_mask": torch.ones(1, n, dtype=torch.bool, device=device),
-                "atom_mask": torch.as_tensor(layout.atom_mask[residue_slice], device=device)[None],
-            }
-            expanded = repeat_batch(batch, args.draws)
-            for method_index, method in enumerate(methods):
-                if method == "mean":
-                    pred, _ = model.sample(expanded, mode="mean")
-                else:
-                    ode_steps = int(method.split("_", 1)[1])
-                    generator = torch.Generator().manual_seed(
-                        args.seed + domain_index * 100000 + start_index * 100 + method_index
-                    )
-                    pred, _ = model.sample(
-                        expanded, mode="ode", steps=ode_steps, generator=generator
-                    )
-                pred_tic = (pairdist_features(pred, pairs) - feature_mean) @ projection
-                scores[method].append(energy_score(pred_tic, tic1))
-                predicted_delta[method].append(pred_tic - tic0[None])
-                transition_destinations[method].extend(
-                    assign_clusters(pred_tic, cluster_centers).tolist()
+        handle = _DomainHandle(path)
+        layout = handle.layout
+        cells = {}
+        for temperature_index, temperature in enumerate(temperatures):
+            for replica_index, replica in enumerate(replicas):
+                seed_offset = (
+                    domain_index * 10000 + temperature_index * 100 + replica_index
+                )
+                cells[(temperature, replica)] = _evaluate_cell(
+                    handle, layout, model, device, cd, delta, methods, replicas, args,
+                    temperature=temperature,
+                    replica=replica,
+                    seed_offset=seed_offset,
                 )
 
-        domain = {
-            "domain": h.name,
-            "temperature": temp,
-            "replica": rep,
-            "starts": len(starts),
-            "draws": args.draws,
-            "reference_transitions": len(reference_delta),
-            "self_energy_distance_floor": self_floor,
-            "methods": {},
-        }
+        domain_methods = {}
         for method in ["noop", *methods]:
-            predicted_increment = np.concatenate(predicted_delta[method])
-            predicted_msm, origin_counts = transition_matrix(
-                np.asarray(transition_origins),
-                np.asarray(transition_destinations[method]),
-                n_states=args.clusters,
-                pseudocount=args.msm_pseudocount,
-            )
-            row_jsd, row_values = weighted_row_jsd_bits(
-                target_msm, predicted_msm, origin_counts
-            )
-            domain["methods"][method] = {
-                "mean_energy_score": float(np.mean(scores[method])),
-                "median_energy_score": float(np.median(scores[method])),
-                "transition_energy_distance": energy_distance(
-                    reference_delta, predicted_increment
-                ),
-                "msm_row_jsd_bits": row_jsd,
-                "msm_observed_origin_states": int((origin_counts > 0).sum()),
-                "msm_max_observed_row_jsd_bits": float(row_values[origin_counts > 0].max()),
+            aggregates = {}
+            cell_values = {}
+            for metric in metric_names:
+                aggregate, values = aggregate_complete_trajectory_grid(
+                    {
+                        key: cell["methods"][method][metric]
+                        for key, cell in cells.items()
+                    },
+                    temperatures,
+                    replicas,
+                )
+                aggregates[metric] = aggregate
+                cell_values[metric] = values
+            domain_methods[method] = {
+                **aggregates,
+                "cell_values": cell_values,
             }
-        rows.append(domain)
-        h.close()
+        rows.append({
+            "domain": handle.name,
+            "grid": {
+                "temperatures": temperatures,
+                "replicas": replicas,
+                "cells": len(cells),
+                "reference": "leave-one-replica-out next-replica cross-fit",
+            },
+            "methods": domain_methods,
+            "trajectories": [cells[key] for key in sorted(cells)],
+        })
+        handle.close()
 
     summary = {}
     for method in ["noop", *methods]:
@@ -300,6 +429,14 @@ def main() -> None:
             "sha256": domain_list_sha256,
             "count": len(domain_ids),
             "evaluated_count": len(chosen),
+        },
+        "trajectory_grid": {
+            "temperatures": temperatures,
+            "replicas": replicas,
+            "required_cells_per_domain": len(temperatures) * len(replicas),
+            "aggregation": "starts_and_draws_then_equal_temperature_replica_cells_then_domains",
+            "reference": "leave-one-replica-out next-replica cross-fit",
+            "formal_full_grid": not args.allow_partial_grid,
         },
         "settings": vars(args),
         "summary": summary,

@@ -10,6 +10,9 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
+MDCATH_TEMPERATURES = (320, 348, 379, 413, 450)
+MDCATH_REPLICAS = (0, 1, 2, 3, 4)
+
 
 def domain_id(path: str | Path) -> str:
     """Return the mdCATH domain identifier encoded in a dataset filename."""
@@ -39,6 +42,21 @@ def require_single_delta(value: object) -> int:
     if delta <= 0:
         raise ValueError(f"delta_frames must be positive, got {delta}")
     return delta
+
+
+def require_mdcath_full_grid(
+    temperatures: Sequence[int], replicas: Sequence[int]
+) -> tuple[list[int], list[int]]:
+    """Require the canonical 5-temperature by 5-replica mdCATH gate grid."""
+    temperatures = [int(value) for value in temperatures]
+    replicas = [int(value) for value in replicas]
+    if temperatures != list(MDCATH_TEMPERATURES) or replicas != list(MDCATH_REPLICAS):
+        raise ValueError(
+            "formal evaluation requires temperatures "
+            f"{list(MDCATH_TEMPERATURES)} and replicas {list(MDCATH_REPLICAS)}; "
+            f"got temperatures={temperatures}, replicas={replicas}"
+        )
+    return temperatures, replicas
 
 
 def load_frozen_domain_ids(path: str | Path, expected_sha256: str) -> tuple[list[str], str]:
@@ -509,6 +527,56 @@ def calibrate_geometry_worst_envelope(
             "horizon": int(horizon),
         }
     return envelope
+
+
+def geometry_worst_excess(
+    panels: Sequence[dict[str, float]],
+    envelope: dict[str, dict[str, float]],
+) -> dict[str, float]:
+    """Return worst signed distance outside a two-sided envelope across steps.
+
+    Positive values violate at least one bound; zero lies on a bound; negative
+    values retain the margin to the closest bound. Callers should pass steps
+    1..H and exclude the initial frame.
+    """
+    if not panels:
+        raise ValueError("at least one geometry panel is required")
+    expected = set(envelope)
+    if any(set(panel) != expected for panel in panels):
+        raise ValueError("all panels and envelope metrics must match exactly")
+    result = {}
+    for name, bounds in envelope.items():
+        values = np.asarray([panel[name] for panel in panels], dtype=np.float64)
+        if not np.isfinite(values).all():
+            raise ValueError(f"geometry panel {name} contains non-finite values")
+        result[name] = float(np.maximum(values - bounds["high"], bounds["low"] - values).max())
+    return result
+
+
+def bootstrap_domain_mean_upper(
+    values: Sequence[float],
+    *,
+    draws: int = 10000,
+    alpha: float = 0.05,
+    seed: int = 0,
+) -> dict[str, object]:
+    """One-sided bootstrap upper bound for a domain-balanced mean."""
+    values = np.asarray(values, dtype=np.float64)
+    if values.ndim != 1 or len(values) == 0 or not np.isfinite(values).all():
+        raise ValueError("values must be a non-empty finite vector")
+    if draws < 2 or not 0 < alpha < 1:
+        raise ValueError("draws must be at least two and alpha must be in (0, 1)")
+    rng = np.random.default_rng(seed)
+    indices = rng.integers(0, len(values), size=(draws, len(values)))
+    samples = values[indices].mean(axis=1)
+    upper = float(np.quantile(samples, 1 - alpha))
+    return {
+        "mean": float(values.mean()),
+        "one_sided_upper": upper,
+        "alpha": float(alpha),
+        "domains": len(values),
+        "passes": bool(upper <= 0),
+    }
 
 
 def geometry_panel_passes(

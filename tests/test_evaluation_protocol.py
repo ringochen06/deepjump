@@ -9,15 +9,18 @@ from deepjump.evaluation import (
     aggregate_complete_trajectory_grid,
     assign_clusters,
     audit_manifest_eligibility,
+    bootstrap_domain_mean_upper,
     calibrate_geometry_envelope,
     calibrate_geometry_worst_envelope,
     fit_kmeans,
     geometry_frame_statistics,
     geometry_panel_passes,
+    geometry_worst_excess,
     jsd_bits,
     load_frozen_domain_ids,
     paired_domain_bootstrap_gain,
     reference_transition_deltas,
+    require_mdcath_full_grid,
     require_single_delta,
     resolve_frozen_domains,
     transition_matrix,
@@ -31,6 +34,16 @@ def test_require_single_delta_rejects_mixed_or_invalid_values():
     for value in ([1, 10], [], 0, -1, 1.5, True):
         with pytest.raises(ValueError):
             require_single_delta(value)
+
+
+def test_formal_grid_requires_exact_five_by_five_order():
+    temperatures, replicas = require_mdcath_full_grid(
+        [320, 348, 379, 413, 450], [0, 1, 2, 3, 4]
+    )
+    assert temperatures == [320, 348, 379, 413, 450]
+    assert replicas == [0, 1, 2, 3, 4]
+    with pytest.raises(ValueError, match="formal evaluation"):
+        require_mdcath_full_grid([320], [0, 1, 2, 3, 4])
 
 
 def test_frozen_domain_list_requires_matching_sha_and_exact_files(tmp_path: Path):
@@ -187,3 +200,30 @@ def test_geometry_worst_envelope_adjusts_joint_horizon():
     assert twenty["bond_mean"]["high"] >= one["bond_mean"]["high"]
     assert twenty["bond_max"]["high"] >= one["bond_max"]["high"]
     assert twenty["bond_mean"]["horizon"] == 20
+
+
+def test_geometry_worst_excess_and_domain_upper_ci():
+    envelope = {
+        "bond_mean": {"low": 3.7, "high": 3.9},
+        "collision_fraction": {"low": 0.0, "high": 0.02},
+    }
+    inside = geometry_worst_excess([
+        {"bond_mean": 3.8, "collision_fraction": 0.01},
+        {"bond_mean": 3.75, "collision_fraction": 0.015},
+    ], envelope)
+    assert inside["bond_mean"] < 0
+    assert inside["collision_fraction"] < 0
+
+    outside = geometry_worst_excess([
+        {"bond_mean": 3.8, "collision_fraction": 0.01},
+        {"bond_mean": 3.95, "collision_fraction": 0.03},
+    ], envelope)
+    assert outside["bond_mean"] == pytest.approx(0.05)
+    assert outside["collision_fraction"] == pytest.approx(0.01)
+
+    passing = bootstrap_domain_mean_upper([-0.2] * 20, draws=1000, seed=4)
+    failing = bootstrap_domain_mean_upper(
+        [-0.2, 0.3] * 10, draws=1000, seed=4
+    )
+    assert passing["passes"] and passing["one_sided_upper"] < 0
+    assert not failing["passes"] and failing["one_sided_upper"] > 0

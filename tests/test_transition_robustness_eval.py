@@ -1,6 +1,12 @@
 import numpy as np
 
-from scripts.transition_robustness_eval import energy_distance, energy_score
+import pytest
+
+from scripts.transition_robustness_eval import (
+    crossfit_reference_replica,
+    energy_distance,
+    energy_score,
+)
 
 
 def test_energy_score_is_zero_for_exact_ensemble():
@@ -27,3 +33,14 @@ def test_energy_distance_detects_shift_and_has_zero_self_distance():
     x = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
     assert energy_distance(x, x) == 0.0
     assert energy_distance(x, x + np.array([3.0, 0.0])) > 0.0
+
+
+def test_crossfit_reference_replica_is_different_and_deterministic():
+    replicas = [0, 1, 2, 3, 4]
+    assert [crossfit_reference_replica(replica, replicas) for replica in replicas] == [
+        1, 2, 3, 4, 0
+    ]
+    with pytest.raises(ValueError, match="at least two"):
+        crossfit_reference_replica(0, [0])
+    with pytest.raises(ValueError, match="not in"):
+        crossfit_reference_replica(5, replicas)
