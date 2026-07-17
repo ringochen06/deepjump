@@ -16,64 +16,12 @@ from torch.utils.data import DataLoader
 
 from deepjump.config import load_config, to_dict
 from deepjump.data import MdcathPairDataset, collate_pairs, discover_domains
-from deepjump.losses import (
-    allatom_pairwise_huber_loss,
-    heavy_atom_offset_loss,
-    pairwise_vector_huber_loss,
-)
+from deepjump.losses import pairwise_vector_huber_loss
 from deepjump.metrics import masked_ca_rmsd
 from deepjump.model import DeepJumpLite
 from deepjump.model.deepjump import count_parameters
+from deepjump.training import total_loss
 from deepjump.utils import move_batch, resolve_device, split_domains
-
-
-def _step_loss(P_hat, V_hat, P_gt, V_gt, batch, cfg):
-    ca = pairwise_vector_huber_loss(P_hat, P_gt, batch["residue_mask"], cfg.train.huber_delta)
-    loss = ca
-    off_val = None
-    if cfg.train.w_offset > 0 and V_hat is not None:
-        off = heavy_atom_offset_loss(V_hat, V_gt, batch["atom_mask"], cfg.train.huber_delta)
-        loss = ca + cfg.train.w_offset * off
-        off_val = off.item()
-    if cfg.train.w_allatom > 0 and V_hat is not None:
-        aa = allatom_pairwise_huber_loss(
-            P_hat, V_hat, P_gt, V_gt, batch["atom_mask"], batch["residue_mask"],
-            cutoff=cfg.model.dist_cutoff, delta=cfg.train.huber_delta,
-        )
-        loss = loss + cfg.train.w_allatom * aa
-    return loss, ca.item(), off_val
-
-
-def total_loss(out, batch, cfg, model=None):
-    """Step-1 loss; if unroll>1 and w_unroll>0, add self-conditioned step-2..K losses.
-
-    Each extra step re-runs the model on its OWN (detached) previous prediction as the new
-    X_t and supervises toward X_{t+kδ} — training the model to continue from imperfect
-    inputs, which is exactly the rollout failure mode. Generalises to K steps.
-    """
-    loss1, ca1, off1 = _step_loss(
-        out["P_hat_1"], out.get("V_hat_1"), batch["P_1"], batch["V_1"], batch, cfg
-    )
-    loss, comps = loss1, {"ca": ca1}
-    if off1 is not None:
-        comps["offset"] = off1
-
-    if cfg.train.w_unroll > 0 and model is not None and out.get("V_hat_1") is not None:
-        P_prev, V_prev = out["P_hat_1"].detach(), out["V_hat_1"].detach()
-        k = 2
-        while f"P_{k}" in batch:
-            batch_k = {**batch, "P_t": P_prev, "V_t": V_prev,
-                       "P_1": batch[f"P_{k}"], "V_1": batch[f"V_{k}"]}
-            out_k = model(batch_k)
-            loss_k, ca_k, _ = _step_loss(
-                out_k["P_hat_1"], out_k.get("V_hat_1"),
-                batch[f"P_{k}"], batch[f"V_{k}"], batch, cfg
-            )
-            loss = loss + cfg.train.w_unroll * loss_k
-            comps[f"ca{k}"] = ca_k
-            P_prev, V_prev = out_k["P_hat_1"].detach(), out_k["V_hat_1"].detach()
-            k += 1
-    return loss, comps
 
 
 def build_loaders(cfg):

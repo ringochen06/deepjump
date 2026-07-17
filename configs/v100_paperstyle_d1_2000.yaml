@@ -1,0 +1,57 @@
+# Bounded architecture calibration (0.4% of the paper's 500k-step recipe).
+# This is paper-inspired, not an exact Ophiuchus reproduction.
+data:
+  root: /data/mdcath
+  manifest: /data/mdcath/manifest.json
+  domains: []
+  temperatures: [320, 348, 379, 413, 450]
+  replicas: [0, 1, 2, 3, 4]
+  delta_frames: 1
+  crop_length: 256
+  val_fraction: 0.02
+  noise_sigma: 0.1
+  unroll: 1
+  canon_symmetric: true
+  max_open_files: 96
+  seed: 0
+model:
+  hidden: 128
+  vector_channels: 64
+  num_heads: 4
+  cond_layers: 6
+  transport_layers: 6
+  seq_embed_ks: 32
+  num_dist_basis: 16
+  dist_cutoff: 25.0
+  predict_heavy: true
+  input_aug_sigma: 0.0
+  source_noise_v: true
+  vector_qk: true
+  paper_ff: true
+train:
+  batch_size: 4
+  grad_accum: 4
+  lr: 5.0e-3
+  lr_final: 3.0e-3
+  warmup_steps: 200
+  grad_clip: 0.1
+  max_steps: 2000
+  val_every: 250
+  log_every: 50
+  ckpt_every: 250
+  keep_last_k: 8
+  huber_delta: 1.0
+  w_ca: 0.0
+  w_bond: 0.0
+  w_bond_unroll: 0.0
+  w_geom_length_unroll: 0.0
+  w_geom_angle_unroll: 0.0
+  w_offset: 0.0
+  w_allatom: 1.0
+  w_unroll: 0.0
+  amp: true
+  amp_dtype: fp16
+  num_workers: 8
+  device: cuda
+  out_dir: runs/v100_paperstyle_d1_2000
+  seed: 0

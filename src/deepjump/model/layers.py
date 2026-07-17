@@ -82,12 +82,49 @@ class GVP(nn.Module):
         return s_new, vec_new
 
 
+class PaperFeedForward(nn.Module):
+    """Algorithm-2-style scalar/vector feed-forward with expansion F=2.
+
+    It keeps the repository's separate scalar ``hidden`` and vector-channel
+    widths while following the paper's two projected branches, multiplicity-wise
+    ``tanh(norm^2)`` activation, and scalar/vector cross-gating.
+    """
+
+    def __init__(self, hidden: int, vec_channels: int, factor: int = 2):
+        super().__init__()
+        expanded = factor * hidden
+        self.scalar_in = nn.Linear(hidden, 2 * expanded)
+        self.vector_in = EquivLinear(vec_channels, 2 * expanded)
+        self.scalar_out = nn.Linear(3 * expanded, hidden)
+        self.vector_out = EquivLinear(expanded, vec_channels)
+
+    def forward(self, s, vec):
+        scalar_q, scalar_cross = self.scalar_in(s).chunk(2, dim=-1)
+        vector_q, vector_cross = self.vector_in(vec).chunk(2, dim=-2)
+        # Norm-squared nonlinearities are evaluated in fp32 under AMP, then
+        # cast back before the output projections.
+        scalar_q_act = torch.tanh(scalar_q.float().square()).to(s.dtype)
+        vector_q_act = torch.tanh(vector_q.float().square().sum(-1)).to(s.dtype)
+        vector_gate = torch.tanh(vector_cross.float().square().sum(-1)).to(s.dtype)
+        scalar_gate = torch.tanh(scalar_cross.float().square()).to(s.dtype)
+        cross_scalar = vector_gate * scalar_cross
+        cross_vector = scalar_gate.unsqueeze(-1) * vector_cross
+        scalar_out = self.scalar_out(
+            torch.cat([scalar_q_act, vector_q_act, cross_scalar], dim=-1)
+        )
+        vector_out = self.vector_out(cross_vector)
+        return scalar_out, vector_out
+
+
 class EquivAttention(nn.Module):
     """Equivariant multi-head self-attention (Algorithm 1).
 
     Attention logits are invariant (q.k + sequence bias + gaussian distance bias),
     so softmax weights are invariant; they aggregate invariant scalar values and
-    equivariant vector values (including relative-direction unit vectors).
+    equivariant vector values (including relative-direction unit vectors).  The
+    ``tensor_qkv`` path follows Algorithm 1 by taking one joint inner product over
+    the scalar and vector parts of the Tensor Cloud and normalizing by their total
+    real dimension.  ``vector_qk`` preserves the earlier gated approximation.
     """
 
     def __init__(
@@ -98,15 +135,28 @@ class EquivAttention(nn.Module):
         seq_ks: int = 32,
         num_dist_basis: int = 16,
         dist_cutoff: float = 25.0,
+        vector_qk: bool = False,
+        tensor_qkv: bool = False,
     ):
         super().__init__()
         assert hidden % num_heads == 0 and vec_channels % num_heads == 0
+        if vector_qk and tensor_qkv:
+            raise ValueError("vector_qk and tensor_qkv are mutually exclusive")
         self.h = num_heads
         self.dh = hidden // num_heads  # scalar head dim
         self.cvh = vec_channels // num_heads  # vector head dim
 
         self.to_q = nn.Linear(hidden, hidden)
         self.to_k = nn.Linear(hidden, hidden)
+        self.vector_qk = vector_qk
+        self.tensor_qkv = tensor_qkv
+        if vector_qk or tensor_qkv:
+            self.to_qv = EquivLinear(vec_channels, vec_channels)
+            self.to_kv = EquivLinear(vec_channels, vec_channels)
+        if vector_qk:
+            # Zero gate makes a warm-started model exactly reproduce the legacy
+            # scalar-q/k logits before learning to use tensor-cloud q/k.
+            self.vector_qk_gate = nn.Parameter(torch.zeros(num_heads))
         self.to_sv = nn.Linear(hidden, hidden)  # scalar values
         self.to_vv = EquivLinear(vec_channels, vec_channels)  # vector values
         self.seq_bias = SequenceDistanceBias(num_heads, ks=seq_ks)
@@ -116,14 +166,38 @@ class EquivAttention(nn.Module):
         # vector output: per head cvh value channels + 1 relative-direction channel
         self.out_vec = EquivLinear(num_heads * (self.cvh + 1), vec_channels)
 
-    def forward(self, s, vec, P, residue_mask):
-        B, N, H = s.shape
+    def _content_logits(self, s, vec):
+        """Invariant q/k content logits before sequence and distance biases."""
+        B, N, _ = s.shape
         q = self.to_q(s).view(B, N, self.h, self.dh)
         k = self.to_k(s).view(B, N, self.h, self.dh)
+        scalar_logits = torch.einsum("bihd,bjhd->bhij", q, k)
+        if self.tensor_qkv:
+            qv = self.to_qv(vec).view(B, N, self.h, self.cvh, 3)
+            kv = self.to_kv(vec).view(B, N, self.h, self.cvh, 3)
+            vector_logits = torch.einsum("bihcx,bjhcx->bhij", qv.float(), kv.float())
+            # Each vector channel contributes three real coordinates to the
+            # Tensor-Cloud inner product; compute the reduction in fp32 under AMP.
+            logits = (scalar_logits.float() + vector_logits) / math.sqrt(
+                self.dh + 3 * self.cvh
+            )
+            logits = logits.to(s.dtype)
+        else:
+            logits = scalar_logits / math.sqrt(self.dh)
+        if self.vector_qk:
+            qv = self.to_qv(vec).view(B, N, self.h, self.cvh, 3)
+            kv = self.to_kv(vec).view(B, N, self.h, self.cvh, 3)
+            vector_logits = torch.einsum("bihcx,bjhcx->bhij", qv.float(), kv.float())
+            vector_logits = vector_logits / math.sqrt(3 * self.cvh)
+            logits = logits + torch.tanh(self.vector_qk_gate).view(1, self.h, 1, 1) * vector_logits.to(logits.dtype)
+        return logits
+
+    def forward(self, s, vec, P, residue_mask):
+        B, N, H = s.shape
         sv = self.to_sv(s).view(B, N, self.h, self.dh)
         vv = self.to_vv(vec).view(B, N, self.h, self.cvh, 3)
 
-        logits = torch.einsum("bihd,bjhd->bhij", q, k) / math.sqrt(self.dh)
+        logits = self._content_logits(s, vec)
         logits = logits + self.seq_bias(N, s.device)[None]
 
         dvec = P[:, None, :, :] - P[:, :, None, :]  # [B,N,N,3] = P_j - P_i
@@ -154,14 +228,22 @@ class EquivAttention(nn.Module):
 class EquivBlock(nn.Module):
     """Pre-norm attention + GVP feed-forward, each with residual connections."""
 
-    def __init__(self, hidden, vec_channels, num_heads, seq_ks, num_dist_basis, dist_cutoff):
+    def __init__(
+        self, hidden, vec_channels, num_heads, seq_ks, num_dist_basis, dist_cutoff,
+        vector_qk=False,
+        tensor_qkv=False,
+        paper_ff=False,
+    ):
         super().__init__()
         self.norm1 = ScalarVectorLayerNorm(hidden, vec_channels)
         self.attn = EquivAttention(
-            hidden, vec_channels, num_heads, seq_ks, num_dist_basis, dist_cutoff
+            hidden, vec_channels, num_heads, seq_ks, num_dist_basis, dist_cutoff,
+            vector_qk=vector_qk,
+            tensor_qkv=tensor_qkv,
         )
         self.norm2 = ScalarVectorLayerNorm(hidden, vec_channels)
-        self.ff = GVP(hidden, vec_channels, vec_channels)
+        self.ff = (PaperFeedForward(hidden, vec_channels)
+                   if paper_ff else GVP(hidden, vec_channels, vec_channels))
 
     def forward(self, s, vec, P, residue_mask):
         sn, vn = self.norm1(s, vec)

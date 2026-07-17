@@ -24,13 +24,21 @@ class Conditioner(nn.Module):
         seq_ks: int,
         num_dist_basis: int,
         dist_cutoff: float,
+        vector_qk: bool = False,
+        tensor_qkv: bool = False,
+        paper_ff: bool = False,
     ):
         super().__init__()
         self.res_embed = ResidueEmbedding(hidden)
         self.delta_embed = DeltaEmbedding(hidden)
         self.vec_in = EquivLinear(MAX_HEAVY, vec_channels)
         self.blocks = nn.ModuleList(
-            EquivBlock(hidden, vec_channels, num_heads, seq_ks, num_dist_basis, dist_cutoff)
+            EquivBlock(
+                hidden, vec_channels, num_heads, seq_ks, num_dist_basis, dist_cutoff,
+                vector_qk=vector_qk,
+                tensor_qkv=tensor_qkv,
+                paper_ff=paper_ff,
+            )
             for _ in range(num_layers)
         )
 

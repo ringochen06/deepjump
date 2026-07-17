@@ -1,0 +1,18 @@
+{
+  "strategy": "length-proportional",
+  "seed": 20260717,
+  "n": 100,
+  "subset_sha256": "e56ed7de735db542f4e20fb73f2654a6c1bcf67f3082849f63f0ab74f4208c38",
+  "exclude_domains_file": "configs/subset_1000_length_proportional.txt",
+  "exclude_count": 1000,
+  "length_band_quotas": [
+    11,
+    26,
+    21,
+    14,
+    9,
+    6,
+    4,
+    9
+  ]
+}

@@ -46,9 +46,16 @@ def aligned_ca_rmsd(P_hat, P_gt):
     return ((Pa - Qc) ** 2).sum(-1).mean().sqrt()
 
 
-def ca_bond_stats(P):
-    """Mean/std of consecutive CA-CA distances (~3.8 A for real backbones). [N,3]."""
+def ca_bond_stats(P, bond_mask=None):
+    """Mean/std of topology-valid consecutive CA distances. [N,3]."""
     d = (P[1:] - P[:-1]).norm(dim=-1)
+    if bond_mask is not None:
+        if bond_mask.shape != d.shape:
+            raise ValueError(f"bond_mask shape {tuple(bond_mask.shape)} != {tuple(d.shape)}")
+        d = d[bond_mask]
+    if d.numel() == 0:
+        nan = P.new_tensor(float("nan"))
+        return nan, nan
     return d.mean(), d.std()
 
 

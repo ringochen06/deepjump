@@ -29,6 +29,9 @@ class Transport(nn.Module):
         num_dist_basis: int,
         dist_cutoff: float,
         predict_heavy: bool = False,
+        vector_qk: bool = False,
+        tensor_qkv: bool = False,
+        paper_ff: bool = False,
     ):
         super().__init__()
         self.predict_heavy = predict_heavy
@@ -37,7 +40,12 @@ class Transport(nn.Module):
         self.vec_in = EquivLinear(MAX_HEAVY, vec_channels)
         self.vec_ctx_proj = EquivLinear(vec_channels, vec_channels)
         self.blocks = nn.ModuleList(
-            EquivBlock(hidden, vec_channels, num_heads, seq_ks, num_dist_basis, dist_cutoff)
+            EquivBlock(
+                hidden, vec_channels, num_heads, seq_ks, num_dist_basis, dist_cutoff,
+                vector_qk=vector_qk,
+                tensor_qkv=tensor_qkv,
+                paper_ff=paper_ff,
+            )
             for _ in range(num_layers)
         )
         self.head = EquivLinear(vec_channels, 1)  # -> per-residue CA displacement

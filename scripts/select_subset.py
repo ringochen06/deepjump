@@ -27,6 +27,9 @@ Then stage exactly that list (see cloud/huawei/stage_to_obs.sh):
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import math
 import random
 from pathlib import Path
 
@@ -63,11 +66,13 @@ def list_data_files() -> list[tuple[str, int]]:
     return files
 
 
-def residues_from_source() -> dict[str, int]:
+def residues_from_source(source_h5: str | Path | None = None) -> dict[str, int]:
     """{domain_id: numResidues} straight from the official mdcath_source.h5."""
     import h5py
 
-    path = hf_hub_download(REPO_ID, SOURCE_H5, repo_type=REPO_TYPE)
+    path = Path(source_h5) if source_h5 else hf_hub_download(
+        REPO_ID, SOURCE_H5, repo_type=REPO_TYPE
+    )
     with h5py.File(path, "r") as f:
         return {k: int(f[k].attrs["numResidues"]) for k in f.keys()}
 
@@ -78,14 +83,32 @@ def pick_smallest(n: int, max_gb: float) -> list[str]:
     return [_domain(p) for p, _ in chosen]
 
 
-def pick_length_proportional(seed: int) -> list[str]:
+def length_band_quotas(n: int) -> list[int]:
+    """Largest-remainder quotas preserving the frozen 1000-domain proportions."""
+    if n < 1:
+        raise ValueError("n must be >= 1")
+    exact = [quota * n / 1000 for _, _, _, quota in LENGTH_BANDS]
+    quotas = [math.floor(value) for value in exact]
+    remaining = n - sum(quotas)
+    order = sorted(range(len(exact)), key=lambda i: (-(exact[i] - quotas[i]), i))
+    for i in order[:remaining]:
+        quotas[i] += 1
+    return quotas
+
+
+def pick_length_proportional(
+    seed: int, n: int = 1000, exclude: set[str] | None = None,
+    residues: dict[str, int] | None = None,
+) -> list[str]:
     """Stratified-by-length sample. One RNG spans all bands, pools are sorted, and the
     final list is sorted -- all three are load-bearing for reproducing the same ids."""
-    res = residues_from_source()
+    res = residues if residues is not None else residues_from_source()
+    exclude = exclude or set()
     rng = random.Random(seed)
     chosen: list[str] = []
-    for label, lo, hi, quota in LENGTH_BANDS:
-        pool = sorted(d for d, v in res.items() if lo <= v <= hi)
+    quotas = length_band_quotas(n)
+    for (label, lo, hi, _), quota in zip(LENGTH_BANDS, quotas):
+        pool = sorted(d for d, v in res.items() if lo <= v <= hi and d not in exclude)
         if len(pool) < quota:
             raise SystemExit(f"band {label}: need {quota} domains, only {len(pool)} available")
         chosen += rng.sample(pool, quota)
@@ -100,19 +123,47 @@ def main() -> None:
     ap.add_argument("--max-gb", type=float, default=0.7, help="smallest strategy: per-file cap")
     ap.add_argument("--seed", type=int, default=20260715, help="length-proportional: sampling seed")
     ap.add_argument("--out", default="configs/subset_1000.txt", help="output id list")
+    ap.add_argument("--exclude-domains-file", help="domain ids to exclude before sampling")
+    ap.add_argument("--metadata-out", help="write frozen selection metadata JSON")
+    ap.add_argument("--source-h5", help="local official mdcath_source.h5 (avoids network)")
+    ap.add_argument("--skip-size-report", action="store_true")
     args = ap.parse_args()
 
     if args.strategy == "length-proportional":
-        domains = pick_length_proportional(args.seed)
+        exclude = set()
+        if args.exclude_domains_file:
+            exclude = {
+                line.strip() for line in Path(args.exclude_domains_file).read_text().splitlines()
+                if line.strip()
+            }
+        residues = residues_from_source(args.source_h5) if args.source_h5 else None
+        domains = pick_length_proportional(args.seed, args.n, exclude, residues)
     else:
         domains = pick_smallest(args.n, args.max_gb)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(domains) + "\n")
+    if args.metadata_out:
+        content = out.read_bytes()
+        metadata = {
+            "strategy": args.strategy,
+            "seed": args.seed,
+            "n": len(domains),
+            "subset_sha256": hashlib.sha256(content).hexdigest(),
+            "exclude_domains_file": args.exclude_domains_file,
+            "exclude_count": len(exclude) if args.strategy == "length-proportional" else 0,
+            "length_band_quotas": length_band_quotas(args.n)
+            if args.strategy == "length-proportional" else None,
+        }
+        metadata_out = Path(args.metadata_out)
+        metadata_out.parent.mkdir(parents=True, exist_ok=True)
+        metadata_out.write_text(json.dumps(metadata, indent=2) + "\n")
 
     # Report total staging size (needs the size listing; best-effort).
     try:
+        if args.skip_size_report:
+            raise RuntimeError("size report disabled")
         size = {_domain(p): s for p, s in list_data_files()}
         total = sum(size[d] for d in domains)
         print(f"wrote {out}: {len(domains)} domains ({len(set(domains))} unique), "

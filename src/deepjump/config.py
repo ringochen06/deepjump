@@ -39,6 +39,10 @@ class ModelConfig:
     dist_cutoff: float = 25.0  # Angstrom, used for gaussian basis range
     predict_heavy: bool = False  # also predict heavy-atom offsets V_hat_1
     input_aug_sigma: float = 0.0  # train-time noise on conditioner input X_t (rollout robustness)
+    source_noise_v: bool = False  # apply stochastic-interpolant source noise to heavy offsets too
+    vector_qk: bool = False  # gated vector-channel contribution to attention q/k logits
+    tensor_qkv: bool = False  # Algorithm-1 joint scalar/vector Tensor-Cloud q/k/v
+    paper_ff: bool = False  # Algorithm-2-style F=2 scalar/vector feed-forward
 
 
 @dataclass
@@ -51,6 +55,11 @@ class TrainConfig:
     log_every: int = 10
     huber_delta: float = 1.0
     w_ca: float = 1.0  # weight on the Ca pairwise-vector loss (backward-compat default 1.0)
+    w_bond: float = 0.0  # weight on consecutive CA bond-length loss (backward-compat off)
+    w_bond_unroll: float = 0.0  # optional bond weight only for self-conditioned steps 2..K
+    w_geom_length_unroll: float = 0.0  # relative CA bond-length loss on steps 2..K
+    w_geom_angle_unroll: float = 0.0  # adjacent CA bond-cosine loss on steps 2..K
+    geom_huber_delta: float = 0.05
     w_offset: float = 0.0  # weight on heavy-atom offset loss (0 => Ca-only)
     w_allatom: float = 0.0  # weight on 25A all-atom pairwise Huber loss
     w_unroll: float = 0.0  # weight on self-conditioned unroll step losses

@@ -19,6 +19,7 @@ build/
 dist/
 .pytest_cache/
 .ipynb_checkpoints/
+/tmp/
 
 # training artifacts
 runs/

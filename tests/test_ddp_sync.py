@@ -28,6 +28,8 @@ def _toy_batch(seed, N=6, B=2):
         "V_t": torch.randn(B, N, 13, 3, generator=g) * 0.3,
         "P_1": torch.randn(B, N, 3, generator=g),
         "V_1": torch.randn(B, N, 13, 3, generator=g) * 0.3,
+        "P_2": torch.randn(B, N, 3, generator=g),
+        "V_2": torch.randn(B, N, 13, 3, generator=g) * 0.3,
         "res_index": torch.randint(0, 20, (B, N), generator=g),
         "atom_mask": torch.ones(B, N, 13, dtype=torch.bool),
         "residue_mask": torch.ones(B, N, dtype=torch.bool),
@@ -93,11 +95,78 @@ def _worker(rank, world, ret):
     same2, total2, _ = _frac_synced(m2, world)
     unwrapped_differs = same2 < total2
 
+    # (3) honest tau=0 self-conditioning performs extra DDP forwards before one
+    # backward; gradients must still synchronize across ranks.
+    from deepjump.config import Config
+    from deepjump.training import total_loss
+
+    torch.manual_seed(0)
+    m3 = DeepJumpLite(cfg, predict_heavy=True); m3.noise_sigma = 0.0
+    ddp3 = DDP(m3)
+    primary = ddp3(batch, tau=tau)
+    loss3_cfg = Config()
+    loss3_cfg.train.w_ca = 1.0
+    loss3_cfg.train.w_offset = 1.0
+    loss3_cfg.train.w_unroll = 0.5
+    loss3, _ = total_loss(primary, batch, loss3_cfg, ddp3)
+    loss3.backward()
+    same3, total3, first_bad3 = _frac_synced(m3, world)
+    unroll_synced = same3 == total3
+
+    # (4) Gated vector q/k adds parameters inside every attention block; all
+    # gradients, including an initially zero gate/projection path, must reduce.
+    vector_cfg = ModelConfig(
+        hidden=16, vector_channels=8, num_heads=2, cond_layers=1,
+        transport_layers=1, vector_qk=True,
+    )
+    torch.manual_seed(0)
+    m4 = DeepJumpLite(vector_cfg, predict_heavy=True); m4.noise_sigma = 0.0
+    ddp4 = DDP(m4)
+    _loss(ddp4(batch, tau=tau), batch).backward()
+    same4, total4, first_bad4 = _frac_synced(m4, world)
+    vector_qk_synced = same4 == total4
+
+    paper_cfg = ModelConfig(
+        hidden=16, vector_channels=8, num_heads=2, cond_layers=1,
+        transport_layers=1, vector_qk=True, paper_ff=True,
+    )
+    torch.manual_seed(0)
+    m5 = DeepJumpLite(paper_cfg, predict_heavy=True); m5.noise_sigma = 0.0
+    ddp5 = DDP(m5, find_unused_parameters=True)
+    _loss(ddp5(batch, tau=tau), batch).backward()
+    same5, total5, first_bad5 = _frac_synced(m5, world)
+    paper_ff_synced = same5 == total5
+
+    # (6) Algorithm-1 Tensor-Cloud q/k uses the vector projections without a
+    # legacy gate; their gradients must also reduce across ranks.
+    tensor_cfg = ModelConfig(
+        hidden=16, vector_channels=8, num_heads=2, cond_layers=1,
+        transport_layers=1, tensor_qkv=True,
+    )
+    torch.manual_seed(0)
+    m6 = DeepJumpLite(tensor_cfg, predict_heavy=True); m6.noise_sigma = 0.0
+    ddp6 = DDP(m6)
+    _loss(ddp6(batch, tau=tau), batch).backward()
+    same6, total6, first_bad6 = _frac_synced(m6, world)
+    tensor_qkv_synced = same6 == total6
+
     if rank == 0:
         ret["synced"] = bool(synced)
         ret["synced_frac"] = f"{same}/{total}"
         ret["first_unsynced"] = first_bad
         ret["unwrapped_differs"] = bool(unwrapped_differs)
+        ret["unroll_synced"] = bool(unroll_synced)
+        ret["unroll_synced_frac"] = f"{same3}/{total3}"
+        ret["unroll_first_unsynced"] = first_bad3
+        ret["vector_qk_synced"] = bool(vector_qk_synced)
+        ret["vector_qk_synced_frac"] = f"{same4}/{total4}"
+        ret["vector_qk_first_unsynced"] = first_bad4
+        ret["paper_ff_synced"] = bool(paper_ff_synced)
+        ret["paper_ff_synced_frac"] = f"{same5}/{total5}"
+        ret["paper_ff_first_unsynced"] = first_bad5
+        ret["tensor_qkv_synced"] = bool(tensor_qkv_synced)
+        ret["tensor_qkv_synced_frac"] = f"{same6}/{total6}"
+        ret["tensor_qkv_first_unsynced"] = first_bad6
     dist.destroy_process_group()
 
 
@@ -117,5 +186,7 @@ def test_ddp_grad_sync():
 if __name__ == "__main__":
     res = run(2)
     print("ddp sync result:", res)
-    ok = res.get("synced") and res.get("unwrapped_differs")
+    ok = (res.get("synced") and res.get("unwrapped_differs")
+          and res.get("unroll_synced") and res.get("vector_qk_synced"))
+    ok = ok and res.get("paper_ff_synced") and res.get("tensor_qkv_synced")
     sys.exit(0 if ok else 1)

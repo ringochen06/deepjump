@@ -1,0 +1,8 @@
+{
+  "source_subset": "configs/subset_1000_length_proportional.txt",
+  "source_subset_count": 1000,
+  "split_seed": 0,
+  "val_fraction": 0.02,
+  "domain_count": 20,
+  "domain_list_sha256": "4fd7015951fc48598d7beb888670d701b39697cdf62c2982a95b2b7b243474af"
+}

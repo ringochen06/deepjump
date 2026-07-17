@@ -33,6 +33,61 @@ def pairwise_vector_huber_loss(
     return (per * pair_mask).sum() / denom
 
 
+def ca_bond_length_huber_loss(
+    P_hat: torch.Tensor,
+    P_gt: torch.Tensor,
+    residue_mask: torch.Tensor,
+    bond_mask: torch.Tensor,
+    delta: float = 1.0,
+) -> torch.Tensor:
+    """Huber loss on CA distances for true consecutive residues only."""
+    pred = (P_hat[:, 1:] - P_hat[:, :-1]).norm(dim=-1)
+    target = (P_gt[:, 1:] - P_gt[:, :-1]).norm(dim=-1)
+    per = F.huber_loss(pred, target, delta=delta, reduction="none")
+    if bond_mask.shape != pred.shape:
+        raise ValueError(f"bond_mask shape {tuple(bond_mask.shape)} != {tuple(pred.shape)}")
+    valid = (residue_mask[:, 1:] & residue_mask[:, :-1] & bond_mask).to(per.dtype)
+    return (per * valid).sum() / valid.sum().clamp_min(1.0)
+
+
+def ca_local_geometry_huber_losses(
+    P_hat: torch.Tensor,
+    P_gt: torch.Tensor,
+    residue_mask: torch.Tensor,
+    bond_mask: torch.Tensor,
+    delta: float = 0.05,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Topology-aware local CA geometry losses.
+
+    The length term acts on relative bond-length error so its scale is not tied
+    to Angstrom units.  The angle term compares adjacent-bond cosines rather
+    than angles themselves, avoiding unstable ``acos`` gradients near 0/pi.
+    """
+    pred_bond = P_hat[:, 1:] - P_hat[:, :-1]
+    target_bond = P_gt[:, 1:] - P_gt[:, :-1]
+    pred_len = pred_bond.norm(dim=-1)
+    target_len = target_bond.norm(dim=-1)
+    if bond_mask.shape != pred_len.shape:
+        raise ValueError(f"bond_mask shape {tuple(bond_mask.shape)} != {tuple(pred_len.shape)}")
+
+    valid_bond = residue_mask[:, 1:] & residue_mask[:, :-1] & bond_mask
+    relative_error = (pred_len - target_len) / target_len.clamp_min(1e-6)
+    length_per = F.huber_loss(
+        relative_error, torch.zeros_like(relative_error), delta=delta, reduction="none"
+    )
+    length_valid = valid_bond.to(length_per.dtype)
+    length_loss = (length_per * length_valid).sum() / length_valid.sum().clamp_min(1.0)
+
+    pred_unit = pred_bond / pred_len.clamp_min(1e-6).unsqueeze(-1)
+    target_unit = target_bond / target_len.clamp_min(1e-6).unsqueeze(-1)
+    pred_cos = (pred_unit[:, :-1] * pred_unit[:, 1:]).sum(dim=-1)
+    target_cos = (target_unit[:, :-1] * target_unit[:, 1:]).sum(dim=-1)
+    angle_per = F.huber_loss(pred_cos, target_cos, delta=delta, reduction="none")
+    valid_angle = (valid_bond[:, :-1] & valid_bond[:, 1:]).to(angle_per.dtype)
+    angle_loss = (angle_per * valid_angle).sum() / valid_angle.sum().clamp_min(1.0)
+    return length_loss, angle_loss
+
+
 def allatom_coords(P, V, atom_mask):
     """Reconstruct absolute all-atom coords from (P, V). -> coords [B,N,14,3], valid [B,N,14].
 
