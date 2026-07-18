@@ -176,6 +176,9 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     full_feedback_bond17 = load_config(
         "configs/v100_tensorcloud01_full_d1_unroll3_bond17_adapt250.yaml"
     )
+    first_party_source_law = load_config(
+        "configs/v100_tensorcloud01_full_d1_first_party_source_law1000.yaml"
+    )
     assert paperstyle.data.unroll == 1
     assert paperstyle.model.source_noise_v
     assert paperstyle.model.vector_qk and paperstyle.model.paper_ff
@@ -335,6 +338,24 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     assert full_tiny_domain.train.w_ca == 0.0
     assert full_tiny_domain.train.w_allatom == 1.0
     assert not full_tiny_domain.train.amp
+    source_data = asdict(first_party_source_law.data)
+    baseline_data = asdict(full_tiny_domain.data)
+    assert source_data.pop("noise_sigma") == 1.5
+    assert baseline_data.pop("noise_sigma") == 0.1
+    assert source_data == baseline_data
+    source_model = asdict(first_party_source_law.model)
+    baseline_model = asdict(full_tiny_domain.model)
+    assert source_model.pop("source_noise_sigma_v") == 1.0
+    assert baseline_model.pop("source_noise_sigma_v") is None
+    assert source_model == baseline_model
+    source_train = asdict(first_party_source_law.train)
+    baseline_train = asdict(full_tiny_domain.train)
+    for key in ("max_steps", "val_every", "ckpt_every", "keep_last_k", "out_dir"):
+        source_train.pop(key)
+        baseline_train.pop(key)
+    assert source_train == baseline_train
+    assert first_party_source_law.train.max_steps == 1000
+    assert first_party_source_law.train.batch_size * 8 * first_party_source_law.train.grad_accum == 128
     assert asdict(full_feedback_adapt.model) == asdict(full_tiny_domain.model)
     assert full_feedback_adapt.data.domains == full_tiny_domain.data.domains
     assert full_feedback_adapt.data.unroll == 3

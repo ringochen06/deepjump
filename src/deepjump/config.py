@@ -40,6 +40,7 @@ class ModelConfig:
     predict_heavy: bool = False  # also predict heavy-atom offsets V_hat_1
     input_aug_sigma: float = 0.0  # train-time noise on conditioner input X_t (rollout robustness)
     source_noise_v: bool = False  # apply stochastic-interpolant source noise to heavy offsets too
+    source_noise_sigma_v: float | None = None  # V-source sigma; None reuses data.noise_sigma
     vector_qk: bool = False  # gated vector-channel contribution to attention q/k logits
     tensor_qkv: bool = False  # Algorithm-1 joint scalar/vector Tensor-Cloud q/k/v
     paper_ff: bool = False  # Algorithm-2-style F=2 scalar/vector feed-forward

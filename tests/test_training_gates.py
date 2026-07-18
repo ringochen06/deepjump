@@ -411,3 +411,36 @@ def test_full_tensor_paper_loss_discriminator_is_matched_bounded_and_fail_closed
     assert '"formal_training_authorized":false' in runner
     assert "sha256sum -c" in runner
     assert "formal training was not started" in runner
+
+
+def test_first_party_source_law_runner_is_bounded_and_fail_closed():
+    runner = Path(
+        "cloud/huawei/run_first_party_source_law1000.sh"
+    ).read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-135}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 135 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        '[[ "$SHUTDOWN_ON_EXIT" == 1 ]]'
+    )
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
+    assert 'systemctl is-active --quiet "$HARD_STOP_UNIT.timer"' in runner
+    assert 'sudo -n shutdown -h now || shutdown_code=$?' in runner
+    assert "v100_tensorcloud01_full_d1_first_party_source_law1000.yaml" in runner
+    assert 'scripts/train_ddp.py --config "$CONFIG"' in runner
+    assert '--expected-step 1000' in runner
+    assert '--domains 1 --starts 5 --steps 6 --methods ode_150' in runner
+    assert '--domains 1 --starts 5 --steps 20 --methods ode_150' in runner
+    assert runner.index('--steps 6 --methods ode_150') < runner.index(
+        'if [[ "$status" == ADVANCE_SOURCE_LAW_H20 ]]'
+    )
+    assert 'scripts/adjudicate_source_law_candidate.py' in runner
+    assert '"formal_training_authorized":false' in runner
+    assert 'sha256sum -c "$RUN_DIR/training_sha256.txt"' in runner
+    assert 'sha256sum -c "$RUN_DIR/audit_sha256.txt"' in runner
+    assert runner.count("timeout --signal=TERM --kill-after=30s") >= 7
+    assert 'cmp "$RUN_DIR/obs_ckpt_gate.json"' in runner
+    assert "formal training was not started" in runner
