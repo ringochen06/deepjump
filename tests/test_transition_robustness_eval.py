@@ -75,12 +75,17 @@ class _NoopModel:
 
 
 def test_evaluate_cell_pairs_model_equal_to_noop_on_identical_evidence(monkeypatch):
+    fake_layout = lambda coordinates, layout: (
+        coordinates,
+        torch.zeros(layout.num_residues, 13, 3),
+    )
     monkeypatch.setattr(
         "scripts.transition_robustness_eval.apply_layout",
-        lambda coordinates, layout: (
-            coordinates,
-            torch.zeros(layout.num_residues, 13, 3),
-        ),
+        fake_layout,
+    )
+    monkeypatch.setattr(
+        "scripts.transition_robustness_eval.apply_model_layout",
+        lambda coordinates, layout, *, canon_symmetric: fake_layout(coordinates, layout),
     )
     args = SimpleNamespace(
         max_features=6,

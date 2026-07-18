@@ -27,7 +27,7 @@ from deepjump.evaluation import (
     weighted_row_jsd_bits,
 )
 from deepjump.model import DeepJumpLite
-from deepjump.representation import apply_layout
+from deepjump.representation import apply_layout, apply_model_layout
 from deepjump.utils import resolve_device
 try:
     from scripts.tica_robustness_eval import (
@@ -169,7 +169,11 @@ def _evaluate_cell(
         coordinates1 = torch.from_numpy(
             np.asarray(handle.coords(temperature, replica, int(frame + delta)))
         )
-        positions0, velocities0 = apply_layout(coordinates0, layout)
+        positions0, velocities0 = apply_model_layout(
+            coordinates0,
+            layout,
+            canon_symmetric=bool(data_cfg.get("canon_symmetric", False)),
+        )
         positions1, _ = apply_layout(coordinates1, layout)
         positions0 = positions0[residue_slice]
         velocities0 = velocities0[residue_slice]

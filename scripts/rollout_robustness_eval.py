@@ -20,7 +20,7 @@ from deepjump.evaluation import (
 )
 from deepjump.metrics import aligned_ca_rmsd, contact_fraction_native
 from deepjump.model import DeepJumpLite
-from deepjump.representation import apply_layout
+from deepjump.representation import apply_model_layout
 from deepjump.sampling import rollout
 from deepjump.utils import resolve_device
 
@@ -88,6 +88,26 @@ def _local_geometry(pred: torch.Tensor, target: torch.Tensor, bond_mask: torch.T
     }
 
 
+def teacher_forced_mean_trajectory(
+    model,
+    real_positions: list[torch.Tensor],
+    real_vectors: list[torch.Tensor],
+    static: dict[str, torch.Tensor],
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Predict every horizon from its real preceding state, never model feedback."""
+    if len(real_positions) != len(real_vectors) or len(real_positions) < 2:
+        raise ValueError("teacher-forced inputs must have matching length >= 2")
+    trajectory = [(real_positions[0], real_vectors[0])]
+    for step in range(len(real_positions) - 1):
+        batch = {
+            "P_t": real_positions[step],
+            "V_t": real_vectors[step],
+            **static,
+        }
+        trajectory.append(model.sample(batch, steps=1, mode="mean"))
+    return trajectory
+
+
 @torch.no_grad()
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -107,6 +127,10 @@ def main() -> None:
     ap.add_argument("--tau-max", type=float, default=1.0)
     ap.add_argument("--terminal-denoise", action="store_true")
     ap.add_argument("--drift-anchor", choices=("state", "conditioner"), default="state")
+    ap.add_argument(
+        "--teacher-forced-mean", action="store_true",
+        help="Also evaluate deterministic one-step predictions from each real preceding frame.",
+    )
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
     if args.noise_sigma is not None and args.noise_sigma < 0:
@@ -148,18 +172,22 @@ def main() -> None:
         residue_slice = slice(offset, offset + n)
 
         real_by_step: list[list[torch.Tensor]] = [[] for _ in range(args.steps + 1)]
-        velocity_start = []
+        vectors_by_step: list[list[torch.Tensor]] = [[] for _ in range(args.steps + 1)]
         for start in starts:
             for step in range(args.steps + 1):
                 coords = torch.from_numpy(np.asarray(h.coords(temp, rep, int(start + step * delta))))
-                P, V = apply_layout(coords, layout)
+                P, V = apply_model_layout(
+                    coords,
+                    layout,
+                    canon_symmetric=bool(cd.get("canon_symmetric", False)),
+                )
                 P = _center(P[residue_slice])
                 real_by_step[step].append(P)
-                if step == 0:
-                    velocity_start.append(V[residue_slice])
+                vectors_by_step[step].append(V[residue_slice])
         real = [torch.stack(values).to(device) for values in real_by_step]
+        real_vectors = [torch.stack(values).to(device) for values in vectors_by_step]
         P0 = real[0]
-        V0 = torch.stack(velocity_start).to(device)
+        V0 = real_vectors[0]
         batch = {
             "P_t": P0,
             "V_t": V0,
@@ -193,6 +221,13 @@ def main() -> None:
                     "drift_anchor": args.drift_anchor,
                 },
             )
+        if args.teacher_forced_mean:
+            static = {
+                key: value for key, value in batch.items() if key not in {"P_t", "V_t"}
+            }
+            trajectories["teacher_forced_mean"] = teacher_forced_mean_trajectory(
+                model, real, real_vectors, static
+            )
 
         domain_methods = {}
         for method, trajectory in trajectories.items():
@@ -220,10 +255,15 @@ def main() -> None:
         h.close()
 
     methods = ["noop", *requested_methods]
+    if args.teacher_forced_mean:
+        methods.append("teacher_forced_mean")
     result = {
         "checkpoint": args.ckpt,
         "checkpoint_step": ck["step"],
         "settings": vars(args),
+        "preprocessing": {
+            "canon_symmetric": bool(cd.get("canon_symmetric", False)),
+        },
         "delta_frames": delta,
         "domain_panel": {
             "path": args.domain_list,
