@@ -20,6 +20,7 @@ def validate_checkpoint(
     history_mode: str = "final",
     expected_delta: int | None = None,
     require_vector_only: bool = False,
+    require_full_tensor: bool = False,
 ) -> tuple[dict, list[str]]:
     errors: list[str] = []
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -47,6 +48,11 @@ def validate_checkpoint(
             errors.append("checkpoint is not the reviewed TensorCloud01 architecture")
         if model_config.get("tensor_cloud01_vector_only_attention") is not True:
             errors.append("checkpoint is not the reviewed vector-only attention candidate")
+    if require_full_tensor:
+        if model_config.get("tensor_cloud01") is not True:
+            errors.append("checkpoint is not the reviewed TensorCloud01 architecture")
+        if model_config.get("tensor_cloud01_vector_only_attention", False) is not False:
+            errors.append("checkpoint is not the reviewed full-tensor attention candidate")
 
     model_state = checkpoint.get("model")
     if not isinstance(model_state, dict) or not model_state:
@@ -111,7 +117,9 @@ def main() -> None:
     parser.add_argument("--expected-world-size", required=True, type=int)
     parser.add_argument("--history-mode", choices=("final", "contains"), default="final")
     parser.add_argument("--expected-delta", type=int)
-    parser.add_argument("--require-vector-only", action="store_true")
+    architecture = parser.add_mutually_exclusive_group()
+    architecture.add_argument("--require-vector-only", action="store_true")
+    architecture.add_argument("--require-full-tensor", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
@@ -124,6 +132,7 @@ def main() -> None:
             args.history_mode,
             args.expected_delta,
             args.require_vector_only,
+            args.require_full_tensor,
         )
     except Exception as exc:  # noqa: BLE001 - convert corrupt artifacts into a gate failure
         report = {

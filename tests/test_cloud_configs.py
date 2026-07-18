@@ -349,3 +349,41 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
         assert calibration.train.out_dir.endswith(f"d{expected_delta}_calibration")
     assert unroll5.train.batch_size * 8 * unroll5.train.grad_accum == 128
     assert unroll5.train.max_steps == 500
+
+
+def test_full_tensor_fp32_discriminator_matches_vector_only_budget():
+    vector_calibration = load_config(
+        "configs/v100_tensorcloud01_vector_only_d1_fp32_calibration.yaml"
+    )
+    vector_continuation = load_config(
+        "configs/v100_tensorcloud01_vector_only_d1_fp32_continuation2000.yaml"
+    )
+    full_calibration = load_config(
+        "configs/v100_tensorcloud01_full_d1_fp32_calibration.yaml"
+    )
+    full_continuation = load_config(
+        "configs/v100_tensorcloud01_full_d1_fp32_continuation2000.yaml"
+    )
+
+    for vector, full in (
+        (vector_calibration, full_calibration),
+        (vector_continuation, full_continuation),
+    ):
+        assert asdict(vector.data) == asdict(full.data)
+        vector_model = asdict(vector.model)
+        full_model = asdict(full.model)
+        assert vector_model.pop("tensor_cloud01_vector_only_attention") is True
+        assert full_model.pop("tensor_cloud01_vector_only_attention") is False
+        assert vector_model == full_model
+        vector_train = asdict(vector.train)
+        full_train = asdict(full.train)
+        vector_train.pop("out_dir")
+        full_train.pop("out_dir")
+        assert vector_train == full_train
+
+    assert not full_calibration.train.amp
+    assert not full_continuation.train.amp
+    assert full_calibration.train.max_steps == 1000
+    assert full_continuation.train.max_steps == 2000
+    assert full_calibration.train.lr_horizon_steps == 1000
+    assert full_continuation.train.lr_horizon_steps == 1000
