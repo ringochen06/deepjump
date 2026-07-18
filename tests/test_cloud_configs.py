@@ -167,6 +167,9 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     vector_fp16_lowlr = load_config(
         "configs/v100_tensorcloud01_vector_only_fp16_lowlr_step230.yaml"
     )
+    full_tiny_domain = load_config(
+        "configs/v100_tensorcloud01_full_d1_tiny_domain5000.yaml"
+    )
     assert paperstyle.data.unroll == 1
     assert paperstyle.model.source_noise_v
     assert paperstyle.model.vector_qk and paperstyle.model.paper_ff
@@ -308,6 +311,20 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     assert tensorcloud01_vector_only_fp32_continuation.train.keep_last_k == 10
     assert tensorcloud01_vector_only_fp32_continuation.train.lr_horizon_steps == 1000
     assert not tensorcloud01_vector_only_fp32_continuation.train.amp
+    full_reference = load_config("configs/v100_tensorcloud01_full_d1_fp32_calibration.yaml")
+    assert asdict(full_tiny_domain.model) == asdict(full_reference.model)
+    assert full_tiny_domain.data.domains == ["1a0hA01"]
+    assert full_tiny_domain.data.temperatures == full_reference.data.temperatures
+    assert full_tiny_domain.data.replicas == full_reference.data.replicas
+    assert full_tiny_domain.data.delta_frames == full_reference.data.delta_frames == 1
+    assert full_tiny_domain.data.crop_length == full_reference.data.crop_length == 256
+    assert full_tiny_domain.data.noise_sigma == full_reference.data.noise_sigma == 0.1
+    assert full_tiny_domain.train.batch_size * 8 * full_tiny_domain.train.grad_accum == 128
+    assert full_tiny_domain.train.max_steps == 5000
+    assert full_tiny_domain.train.lr_horizon_steps == 500000
+    assert full_tiny_domain.train.w_ca == 0.0
+    assert full_tiny_domain.train.w_allatom == 1.0
+    assert not full_tiny_domain.train.amp
     for probe in (vector_fp32_highlr, vector_fp16_lowlr):
         assert asdict(probe.data) == asdict(tensorcloud01_vector_only.data)
         assert asdict(probe.model) == asdict(tensorcloud01_vector_only.model)
