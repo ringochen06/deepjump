@@ -108,6 +108,19 @@ def teacher_forced_mean_trajectory(
     return trajectory
 
 
+def one_step_persistence_trajectory(
+    real_positions: list[torch.Tensor],
+    real_vectors: list[torch.Tensor],
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Use the preceding real frame as the prediction for each one-step target."""
+    if len(real_positions) != len(real_vectors) or len(real_positions) < 2:
+        raise ValueError("persistence inputs must have matching length >= 2")
+    return [
+        (real_positions[0], real_vectors[0]),
+        *list(zip(real_positions[:-1], real_vectors[:-1])),
+    ]
+
+
 @torch.no_grad()
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -202,7 +215,10 @@ def main() -> None:
             )[None].repeat(len(starts), 1),
         }
 
-        trajectories = {"noop": [(P0, V0)] * (args.steps + 1)}
+        trajectories = {
+            "noop": [(P0, V0)] * (args.steps + 1),
+            "one_step_persistence": one_step_persistence_trajectory(real, real_vectors),
+        }
         for method_index, method in enumerate(requested_methods):
             if method == "mean":
                 mode, ode_steps, generator = "mean", 1, None
@@ -254,7 +270,7 @@ def main() -> None:
         })
         h.close()
 
-    methods = ["noop", *requested_methods]
+    methods = ["noop", "one_step_persistence", *requested_methods]
     if args.teacher_forced_mean:
         methods.append("teacher_forced_mean")
     result = {

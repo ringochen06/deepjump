@@ -3,6 +3,7 @@ import torch
 
 from scripts.rollout_robustness_eval import (
     _local_geometry,
+    one_step_persistence_trajectory,
     select_validation_domains,
     summarize_domains,
     teacher_forced_mean_trajectory,
@@ -75,3 +76,13 @@ def test_teacher_forced_trajectory_uses_each_real_preceding_state():
     assert len(trajectory) == 4
     assert [value[0, 0, 0].item() for value in model.inputs] == [0.0, 1.0, 2.0]
     assert [frame[0][0, 0, 0].item() for frame in trajectory] == [0.0, 10.0, 11.0, 12.0]
+
+
+def test_one_step_persistence_uses_preceding_real_frame():
+    positions = [torch.full((1, 2, 3), float(step)) for step in range(4)]
+    vectors = [torch.full((1, 2, 13, 3), float(step)) for step in range(4)]
+
+    trajectory = one_step_persistence_trajectory(positions, vectors)
+
+    assert len(trajectory) == 4
+    assert [frame[0][0, 0, 0].item() for frame in trajectory] == [0.0, 0.0, 1.0, 2.0]

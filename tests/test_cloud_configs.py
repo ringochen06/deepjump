@@ -170,6 +170,9 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     full_tiny_domain = load_config(
         "configs/v100_tensorcloud01_full_d1_tiny_domain5000.yaml"
     )
+    full_feedback_adapt = load_config(
+        "configs/v100_tensorcloud01_full_d1_unroll3_adapt250.yaml"
+    )
     assert paperstyle.data.unroll == 1
     assert paperstyle.model.source_noise_v
     assert paperstyle.model.vector_qk and paperstyle.model.paper_ff
@@ -329,6 +332,13 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     assert full_tiny_domain.train.w_ca == 0.0
     assert full_tiny_domain.train.w_allatom == 1.0
     assert not full_tiny_domain.train.amp
+    assert asdict(full_feedback_adapt.model) == asdict(full_tiny_domain.model)
+    assert full_feedback_adapt.data.domains == full_tiny_domain.data.domains
+    assert full_feedback_adapt.data.unroll == 3
+    assert full_feedback_adapt.train.w_unroll == 0.5
+    assert full_feedback_adapt.train.max_steps == 250
+    assert full_feedback_adapt.train.batch_size * 8 * full_feedback_adapt.train.grad_accum == 128
+    assert not full_feedback_adapt.train.amp
     for probe in (vector_fp32_highlr, vector_fp16_lowlr):
         assert asdict(probe.data) == asdict(tensorcloud01_vector_only.data)
         assert asdict(probe.model) == asdict(tensorcloud01_vector_only.model)
