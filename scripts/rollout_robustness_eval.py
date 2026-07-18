@@ -248,13 +248,14 @@ def main() -> None:
         domain_methods = {}
         for method, trajectory in trajectories.items():
             metrics = {name: [] for name in (
-                "rmsd", "fnc", "bond_mean", "bond_p95", "bond_p99", "bond_max",
+                "rmsd", "rmsd_by_start", "fnc", "bond_mean", "bond_p95", "bond_p99", "bond_max",
                 "bond_mae_real", "angle_cos_mae_real",
             )}
             for step, (pred, _) in enumerate(trajectory):
                 rmsd = [aligned_ca_rmsd(pred[i], real[step][i]).item() for i in range(len(starts))]
                 fnc = contact_fraction_native(pred, real[step], batch["residue_mask"])
                 metrics["rmsd"].append(float(np.mean(rmsd)))
+                metrics["rmsd_by_start"].append([float(value) for value in rmsd])
                 metrics["fnc"].append(float(fnc.mean().item()))
                 geometry = _local_geometry(pred, real[step], batch["bond_mask"])
                 for name, value in geometry.items():
