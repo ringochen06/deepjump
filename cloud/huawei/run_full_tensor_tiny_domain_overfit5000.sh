@@ -9,11 +9,11 @@ DATA_ROOT=${DATA_ROOT:-/data/mdcath}
 export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 SHUTDOWN_ON_EXIT=${SHUTDOWN_ON_EXIT:?set SHUTDOWN_ON_EXIT=1}
 HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-135}
-TRAIN_TIMEOUT_MINUTES=${TRAIN_TIMEOUT_MINUTES:-90}
+TRAIN_TIMEOUT_MINUTES=${TRAIN_TIMEOUT_MINUTES:-100}
 
 [[ "$SHUTDOWN_ON_EXIT" == 1 ]] || { printf 'SHUTDOWN_ON_EXIT must be 1\n' >&2; exit 2; }
 [[ "$HARD_STOP_MINUTES" == 135 ]] || { printf 'HARD_STOP_MINUTES must be 135\n' >&2; exit 2; }
-[[ "$TRAIN_TIMEOUT_MINUTES" -le 90 ]] || { printf 'training timeout exceeds 90 minutes\n' >&2; exit 2; }
+[[ "$TRAIN_TIMEOUT_MINUTES" -le 100 ]] || { printf 'training timeout exceeds 100 minutes\n' >&2; exit 2; }
 
 shutdown_on_exit() {
   code=$?
