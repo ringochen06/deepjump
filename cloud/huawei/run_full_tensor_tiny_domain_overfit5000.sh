@@ -35,6 +35,8 @@ shutdown_on_exit() {
   exit "$code"
 }
 trap shutdown_on_exit EXIT
+# Replace the short console-recovery cutoff only after the runner exit trap exists.
+sudo -n shutdown -c 2>/dev/null || true
 sudo -n shutdown -h "+$HARD_STOP_MINUTES"
 
 EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?set deployed commit SHA}
