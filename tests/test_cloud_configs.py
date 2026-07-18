@@ -322,6 +322,10 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     assert full_tiny_domain.train.batch_size * 8 * full_tiny_domain.train.grad_accum == 128
     assert full_tiny_domain.train.max_steps == 5000
     assert full_tiny_domain.train.lr_horizon_steps == 500000
+    assert full_tiny_domain.train.warmup_steps == 200
+    assert full_tiny_domain.train.val_every == 500
+    assert full_tiny_domain.train.ckpt_every == 500
+    assert full_tiny_domain.train.keep_last_k == 3
     assert full_tiny_domain.train.w_ca == 0.0
     assert full_tiny_domain.train.w_allatom == 1.0
     assert not full_tiny_domain.train.amp

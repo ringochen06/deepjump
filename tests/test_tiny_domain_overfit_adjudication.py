@@ -116,3 +116,39 @@ def test_adjudication_fails_closed_on_panel_or_checkpoint_mismatch(tmp_path):
     rollout = _write_rollout(tmp_path, step=4500)
     with pytest.raises(ValueError, match="panel"):
         adjudicate(history, rollout, "d" * 64)
+
+
+def test_selection_fails_closed_on_history_step_set_mismatch(tmp_path):
+    history = _write_history(tmp_path, _converged_losses())
+    rows = json.loads(history.read_text())
+    history.write_text(json.dumps(rows[:-1]))
+    with pytest.raises(ValueError, match="history steps mismatch"):
+        select_checkpoint(history)
+
+
+def test_selection_fails_closed_when_validation_noop_changes(tmp_path):
+    history = _write_history(tmp_path, _converged_losses())
+    rows = json.loads(history.read_text())
+    rows[-1]["noop_rmsd"] = 2.001
+    history.write_text(json.dumps(rows))
+    with pytest.raises(ValueError, match="no-op RMSD changed"):
+        select_checkpoint(history)
+
+
+@pytest.mark.parametrize("invalid_loss", [-1.0, float("nan")])
+def test_selection_rejects_invalid_validation_loss(tmp_path, invalid_loss):
+    losses = _converged_losses()
+    losses[0] = invalid_loss
+    history = _write_history(tmp_path, losses)
+    with pytest.raises(ValueError, match="validation losses|must be finite"):
+        select_checkpoint(history)
+
+
+def test_adjudication_fails_closed_on_rollout_settings_mismatch(tmp_path):
+    history = _write_history(tmp_path, _converged_losses())
+    rollout = _write_rollout(tmp_path, step=4500)
+    result = json.loads(rollout.read_text())
+    result["settings"]["starts"] = 4
+    rollout.write_text(json.dumps(result))
+    with pytest.raises(ValueError, match="settings mismatch"):
+        adjudicate(history, rollout, DOMAIN_SHA)
