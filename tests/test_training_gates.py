@@ -401,7 +401,8 @@ def test_full_tensor_paper_loss_discriminator_is_matched_bounded_and_fail_closed
     assert "for step in $(seq 1100 100 2000)" in runner
     assert "--domains 3 --starts 2 --steps 20 --methods mean,ode_1" in runner
     assert "--drift-anchor state" in runner
-    assert "scripts/adjudicate_full_tensor_discriminator.py" in runner
+    assert '"$PYTHON" -m scripts.adjudicate_full_tensor_discriminator' in runner
+    assert '"$PYTHON" scripts/adjudicate_full_tensor_discriminator.py' not in runner
     assert "VECTOR_BASELINE_OBS_PREFIX" in runner
     assert "VECTOR_BASELINE_SHA256" in runner
     assert "35b73f0d3f0889201fb192735114a7e818e30df41259edf6f4a6f8f8479755ff" in runner

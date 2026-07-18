@@ -184,7 +184,7 @@ for step in $(seq 1100 100 2000); do
     > "$ROLLOUT_DIR/rollout_${step}.log" 2>&1
 done
 
-"$PYTHON" scripts/adjudicate_full_tensor_discriminator.py \
+"$PYTHON" -m scripts.adjudicate_full_tensor_discriminator \
   --history "$CONTINUATION_DIR/history.json" \
   --rollout-dir "$ROLLOUT_DIR" \
   --vector-baseline "$VECTOR_BASELINE_PATH" \
