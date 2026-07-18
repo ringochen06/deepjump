@@ -26,6 +26,20 @@ def _cfg_from_ckpt(d: dict) -> Config:
     )
 
 
+def _filter_checkpoint_domains(files: list[Path], domains: list[str]) -> list[Path]:
+    if not domains:
+        return list(files)
+    wanted = set(domains)
+    filtered = [
+        path
+        for path in files
+        if path.stem.replace("mdcath_dataset_", "") in wanted
+    ]
+    if not filtered:
+        raise ValueError(f"checkpoint domains not found: {sorted(wanted)}")
+    return filtered
+
+
 def _gradient_norm(model: torch.nn.Module, loss: torch.Tensor, retain_graph: bool) -> float:
     model.zero_grad(set_to_none=True)
     loss.backward(retain_graph=retain_graph)
@@ -54,7 +68,7 @@ def main() -> None:
     model.load_state_dict(ck["model"])
     model.train()
 
-    files = discover_domains(cfg.data.root)
+    files = _filter_checkpoint_domains(discover_domains(cfg.data.root), cfg.data.domains)
     _, val_files = split_domains(files, cfg.data.val_fraction, cfg.data.seed)
     manifest = json.loads(Path(cfg.data.manifest).read_text()) if cfg.data.manifest else None
     ds = MdcathPairDataset(
@@ -78,17 +92,36 @@ def main() -> None:
         out["P_hat_1"], batch["P_1"], batch["residue_mask"], batch["bond_mask"],
         delta=cfg.train.huber_delta,
     )
+    noop_aa = allatom_pairwise_huber_loss(
+        batch["P_t"], batch["V_t"], batch["P_1"], batch["V_1"],
+        batch["atom_mask"], batch["residue_mask"],
+        cutoff=cfg.model.dist_cutoff, delta=cfg.train.huber_delta,
+    )
+    noop_bond = ca_bond_length_huber_loss(
+        batch["P_t"], batch["P_1"], batch["residue_mask"], batch["bond_mask"],
+        delta=cfg.train.huber_delta,
+    )
     aa_grad = _gradient_norm(model, aa, retain_graph=True)
     bond_grad = _gradient_norm(model, bond, retain_graph=False)
+    aa_value = float(aa.detach().item())
+    bond_value = float(bond.detach().item())
+    noop_aa_value = float(noop_aa.detach().item())
+    noop_bond_value = float(noop_bond.detach().item())
     result = {
         "checkpoint": args.ckpt,
         "checkpoint_step": ck["step"],
         "sample_indices": indices,
         "domains": cpu_batch["domains"],
-        "allatom_loss": float(aa.detach().item()),
-        "bond_loss": float(bond.detach().item()),
+        "allatom_loss": aa_value,
+        "bond_loss": bond_value,
+        "noop_allatom_loss": noop_aa_value,
+        "noop_bond_loss": noop_bond_value,
+        "model_to_noop_allatom_loss_ratio": aa_value / max(noop_aa_value, 1e-12),
+        "model_to_noop_bond_loss_ratio": bond_value / max(noop_bond_value, 1e-12),
+        "bond_to_allatom_loss_ratio": bond_value / max(aa_value, 1e-12),
         "allatom_grad_norm": aa_grad,
         "bond_grad_norm": bond_grad,
+        "bond_to_allatom_grad_norm_ratio": bond_grad / max(aa_grad, 1e-12),
         "equal_gradient_bond_weight": aa_grad / max(bond_grad, 1e-12),
     }
     output = Path(args.output)
