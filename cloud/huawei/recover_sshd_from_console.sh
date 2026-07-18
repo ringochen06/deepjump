@@ -5,6 +5,7 @@ set -euo pipefail
 MODE=${1:-audit}
 RECOVERY_HARD_STOP_MINUTES=${RECOVERY_HARD_STOP_MINUTES:-20}
 SSHD=${SSHD:-/usr/sbin/sshd}
+RECOVERY_HARD_STOP_UNIT="deepjump-recovery-hard-stop-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
 [[ "$MODE" == audit || "$MODE" == repair ]] || {
   printf 'usage: %s [audit|repair]\n' "$0" >&2
@@ -22,13 +23,17 @@ SSHD=${SSHD:-/usr/sbin/sshd}
   printf 'sshd executable not found at %s\n' "$SSHD" >&2
   exit 2
 }
+command -v systemd-run >/dev/null
+command -v systemctl >/dev/null
 
-# Arm a short independent cutoff before inspecting or restarting the service.
-shutdown -c 2>/dev/null || true
-shutdown -h "+$RECOVERY_HARD_STOP_MINUTES"
+# Use a unique transient timer so no existing cutoff is cancelled while arming.
+systemd-run --quiet --unit="$RECOVERY_HARD_STOP_UNIT" \
+  --on-active="${RECOVERY_HARD_STOP_MINUTES}m" \
+  /usr/bin/systemctl poweroff
+systemctl is-active --quiet "$RECOVERY_HARD_STOP_UNIT.timer"
 
-printf 'recovery_mode=%s started_at=%s hard_stop_minutes=%s\n' \
-  "$MODE" "$(date -Is)" "$RECOVERY_HARD_STOP_MINUTES"
+printf 'recovery_mode=%s started_at=%s hard_stop_minutes=%s hard_stop_unit=%s.timer\n' \
+  "$MODE" "$(date -Is)" "$RECOVERY_HARD_STOP_MINUTES" "$RECOVERY_HARD_STOP_UNIT"
 hostname
 uptime
 systemctl is-active ssh || true
@@ -77,4 +82,5 @@ systemctl is-active --quiet ssh
 ss -ltnp 'sport = :22' | grep -q ':22'
 printf 'SSH_SERVICE_READY mode=%s completed_at=%s\n' "$MODE" "$(date -Is)"
 printf 'Keep this console open while Codex verifies the remote banner and public-key login.\n'
-printf 'Do not cancel the 20-minute cutoff until the experiment runner replaces it.\n'
+printf 'Do not stop %s.timer until the experiment runner verifies its own timer.\n' \
+  "$RECOVERY_HARD_STOP_UNIT"

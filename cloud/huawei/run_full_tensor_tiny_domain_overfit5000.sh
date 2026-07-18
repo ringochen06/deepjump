@@ -10,6 +10,7 @@ export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 SHUTDOWN_ON_EXIT=${SHUTDOWN_ON_EXIT:?set SHUTDOWN_ON_EXIT=1}
 HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-135}
 TRAIN_TIMEOUT_MINUTES=${TRAIN_TIMEOUT_MINUTES:-100}
+HARD_STOP_UNIT="deepjump-experiment-hard-stop-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
 [[ "$SHUTDOWN_ON_EXIT" == 1 ]] || { printf 'SHUTDOWN_ON_EXIT must be 1\n' >&2; exit 2; }
 [[ "$HARD_STOP_MINUTES" == 135 ]] || { printf 'HARD_STOP_MINUTES must be 135\n' >&2; exit 2; }
@@ -26,7 +27,6 @@ shutdown_on_exit() {
     set -e
   fi
   printf 'tiny-domain diagnostic exit=%s; requesting shutdown at %s\n' "$code" "$(date -Is)"
-  sudo -n shutdown -c 2>/dev/null || true
   sudo -n shutdown -h now || shutdown_code=$?
   if [[ "$shutdown_code" != 0 ]]; then
     printf 'ERROR: shutdown failed with exit=%s\n' "$shutdown_code" >&2
@@ -35,9 +35,14 @@ shutdown_on_exit() {
   exit "$code"
 }
 trap shutdown_on_exit EXIT
-# Replace the short console-recovery cutoff only after the runner exit trap exists.
+# Arm and verify a distinct experiment timer before releasing recovery cutoffs.
+sudo -n systemd-run --quiet --unit="$HARD_STOP_UNIT" \
+  --on-active="${HARD_STOP_MINUTES}m" \
+  /usr/bin/systemctl poweroff
+sudo -n systemctl is-active --quiet "$HARD_STOP_UNIT.timer"
+sudo -n systemctl stop 'deepjump-recovery-hard-stop-*.timer' 2>/dev/null || true
+# Cancel only legacy shutdown(8) recovery cutoffs after the new timer is active.
 sudo -n shutdown -c 2>/dev/null || true
-sudo -n shutdown -h "+$HARD_STOP_MINUTES"
 
 EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?set deployed commit SHA}
 EXPECTED_HOSTNAME=${EXPECTED_HOSTNAME:?set authorized GPU hostname}
