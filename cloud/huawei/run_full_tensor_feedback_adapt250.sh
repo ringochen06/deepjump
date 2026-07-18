@@ -18,13 +18,15 @@ HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-120}
 TRAIN_TIMEOUT_MINUTES=${TRAIN_TIMEOUT_MINUTES:-90}
 HARD_STOP_UNIT="deepjump-feedback-adapt-hard-stop-$RUN_ID-$$"
 
-CONFIG=configs/v100_tensorcloud01_full_d1_unroll3_adapt250.yaml
+CONFIG=${CONFIG:-configs/v100_tensorcloud01_full_d1_unroll3_adapt250.yaml}
 DOMAIN_LIST=configs/tiny_overfit_domain_1a0hA01.txt
 DOMAIN_LIST_SHA256=3da0d5c44e5d1a68aa5e99d01acf296725f7e8f94ca990547991b0d87bcf0d9d
-TRAIN_DIR="$REPO/runs/v100_tensorcloud01_full_d1_unroll3_adapt250"
+TRAIN_DIR=${TRAIN_DIR:-$REPO/runs/v100_tensorcloud01_full_d1_unroll3_adapt250}
 RUN_DIR="$REPO/runs/full_tensor_feedback_adapt250_$RUN_ID"
 READBACK_DIR="/tmp/full_tensor_feedback_adapt250_readback_$RUN_ID"
-OBS_DST="$BUCKET/deepjump-diagnostics/full-tensor-feedback-adapt250/$RUN_ID"
+OBS_TOPIC=${OBS_TOPIC:-full-tensor-feedback-adapt250}
+EXPERIMENT_SCOPE=${EXPERIMENT_SCOPE:-single_domain_250_step_feedback_adaptation_only}
+OBS_DST="$BUCKET/deepjump-diagnostics/$OBS_TOPIC/$RUN_ID"
 
 [[ "$SHUTDOWN_ON_EXIT" == 1 ]] || { printf 'SHUTDOWN_ON_EXIT must be 1\n' >&2; exit 2; }
 [[ "$HARD_STOP_MINUTES" -le 120 ]] || { printf 'hard stop exceeds 120 minutes\n' >&2; exit 2; }
@@ -151,8 +153,8 @@ obsutil sync "$OBS_DST/audit" "$READBACK_DIR/audit"
 (cd "$READBACK_DIR/audit" && sha256sum -c "$RUN_DIR/audit_sha256.txt")
 
 decision_status=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$RUN_DIR/decision.json")
-printf '{"status":"%s","scope":"single_domain_250_step_feedback_adaptation_only","formal_training_authorized":false,"run_id":"%s","commit":"%s","checkpoint_sha256":"%s","obs":"%s","completed_at":"%s"}\n' \
-  "$decision_status" "$RUN_ID" "$actual_commit" "$checkpoint_sha" "$OBS_DST" "$(date -Is)" \
+printf '{"status":"%s","scope":"%s","formal_training_authorized":false,"run_id":"%s","commit":"%s","checkpoint_sha256":"%s","obs":"%s","completed_at":"%s"}\n' \
+  "$decision_status" "$EXPERIMENT_SCOPE" "$RUN_ID" "$actual_commit" "$checkpoint_sha" "$OBS_DST" "$(date -Is)" \
   | tee "$RUN_DIR/summary.json"
 sha256sum "$RUN_DIR/summary.json" > "$RUN_DIR/summary_sha256.txt"
 obsutil cp -f "$RUN_DIR/summary.json" "$OBS_DST/audit/summary.json"
