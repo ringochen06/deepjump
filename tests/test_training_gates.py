@@ -298,3 +298,29 @@ def test_vector_only_sampling_discriminator_is_bounded_and_inference_only():
     assert '"$PYTHON" scripts/train_ddp.py' not in runner
     assert "--warm-start" not in runner
     assert "no training or scientific gate was run" in runner
+
+
+def test_vector_only_paper_loss_continuation_is_bounded_and_fail_closed():
+    runner = Path(
+        "cloud/huawei/run_vector_only_paper_loss_continuation2000.sh"
+    ).read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-90}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 90 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'CHECKPOINT=${CHECKPOINT:?'
+    )
+    assert 'sudo -n shutdown -h "+$HARD_STOP_MINUTES"' in runner
+    assert 'sudo -n shutdown -h now' in runner
+    assert 'EXPECTED_CHECKPOINT_SHA256=${EXPECTED_CHECKPOINT_SHA256:?' in runner
+    assert "v100_tensorcloud01_vector_only_d1_fp32_continuation2000.yaml" in runner
+    assert 'scripts/train_ddp.py --config "$CONFIG" --resume "$CHECKPOINT"' in runner
+    assert "--warm-start" not in runner
+    assert "--expected-step 1000" in runner
+    assert "for step in $(seq 1100 100 2000)" in runner
+    assert "--domains 3 --starts 2 --steps 20 --methods mean,ode_1" in runner
+    assert "--drift-anchor state" in runner
+    assert "scripts/adjudicate_paper_loss_continuation.py" in runner
+    assert '"formal_training_authorized":false' in runner
+    assert "sha256sum -c" in runner
+    assert "formal training was not started" in runner
