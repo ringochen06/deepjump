@@ -25,7 +25,9 @@ def split_domains(files, val_fraction: float, seed: int = 0):
 
     files = list(files)
     if len(files) == 1:
-        return files, files  # tiny-data mode: same domain, disjoint frames in practice
+        # Tiny-data diagnostic: train and validation intentionally reuse the same
+        # trajectories. This is in-sample by construction, not a held-out split.
+        return files, files
     rng = np.random.default_rng(seed)
     order = rng.permutation(len(files))
     n_val = max(1, int(round(len(files) * val_fraction)))
