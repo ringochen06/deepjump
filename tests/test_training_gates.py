@@ -108,3 +108,51 @@ def test_checkpoint_gate_rejects_nonfinite_or_wrong_world_size(tmp_path):
     assert report["status"] == "FAIL"
     assert any("world_size" in error for error in report["errors"])
     assert any("non-finite" in error for error in report["errors"])
+
+
+def test_checkpoint_gate_can_select_one_intermediate_history_record(tmp_path):
+    checkpoint, history = _write_checkpoint(tmp_path, step=250)
+    history.write_text(
+        json.dumps(
+            [
+                {"step": 250, "val_loss": 1.0, "val_rmsd": 2.0, "noop_rmsd": 3.0},
+                {"step": 500, "val_loss": 0.8, "val_rmsd": 1.8, "noop_rmsd": 3.0},
+            ]
+        )
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_training_checkpoint.py",
+            "--checkpoint",
+            str(checkpoint),
+            "--history",
+            str(history),
+            "--expected-step",
+            "250",
+            "--expected-world-size",
+            "8",
+            "--history-mode",
+            "contains",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["history"]["step"] == 250
+    assert report["history_mode"] == "contains"
+
+
+def test_tensorcloud01_calibration_runner_is_bounded_and_delta_scoped():
+    runner = Path("cloud/huawei/run_tensorcloud01_calibration.sh").read_text()
+    assert 'DELTA=${DELTA:?' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-30}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 30 ]]' in runner
+    assert 'SHUTDOWN_ON_EXIT=${SHUTDOWN_ON_EXIT:?' in runner
+    assert 'sudo -n shutdown -h now' in runner
+    assert 'scripts/train_ddp.py --config "$CONFIG"' in runner
+    assert "--warm-start" not in runner
+    assert "formal training was not started" in runner
+    for delta in (1, 10, 100):
+        assert f"v100_tensorcloud01_d{delta}_calibration.yaml" in runner

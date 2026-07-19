@@ -1,9 +1,5 @@
-# Thirty-step eight-GPU engineering smoke for the dedicated TensorCloud01 path.
-# Fresh initialization only. This run stresses FP16/DDP/checkpointing and has no
-# scientific interpretation. The 20-step warmup is required by the V100 numerical
-# matrix: a cold-start update at 5e-3 overflowed FP16 gradients, while warmup was
-# finite through ten full-learning-rate steps. Effective batch: 2 * 8 GPUs * 8
-# accumulation = 128.
+# Bounded 1000-step TensorCloud01 calibration for delta_frames=1.
+# Fresh initialization only. This is a scientific diagnostic, not formal training.
 data:
   root: /data/mdcath
   manifest: /data/mdcath/manifest.json
@@ -38,14 +34,14 @@ train:
   batch_size: 2
   grad_accum: 8
   lr: 5.0e-3
-  lr_final: 5.0e-3
-  warmup_steps: 20
+  lr_final: 3.0e-3
+  warmup_steps: 200
   grad_clip: 0.1
-  max_steps: 30
-  val_every: 30
-  log_every: 1
-  ckpt_every: 30
-  keep_last_k: 1
+  max_steps: 1000
+  val_every: 250
+  log_every: 50
+  ckpt_every: 250
+  keep_last_k: 4
   huber_delta: 1.0
   w_ca: 0.0
   w_bond: 0.0
@@ -59,5 +55,5 @@ train:
   amp_dtype: fp16
   num_workers: 8
   device: cuda
-  out_dir: runs/v100_tensorcloud01_d1_smoke
+  out_dir: runs/v100_tensorcloud01_d1_calibration
   seed: 0
