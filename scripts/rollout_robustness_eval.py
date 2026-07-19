@@ -141,6 +141,10 @@ def main() -> None:
     ap.add_argument("--terminal-denoise", action="store_true")
     ap.add_argument("--drift-anchor", choices=("state", "conditioner"), default="state")
     ap.add_argument(
+        "--project-v-atom-mask", action="store_true",
+        help="Project V onto atom_mask at every sampler state transition.",
+    )
+    ap.add_argument(
         "--teacher-forced-mean", action="store_true",
         help="Also evaluate deterministic one-step predictions from each real preceding frame.",
     )
@@ -235,6 +239,7 @@ def main() -> None:
                     "tau_max": args.tau_max,
                     "terminal_denoise": args.terminal_denoise,
                     "drift_anchor": args.drift_anchor,
+                    "project_v_atom_mask": args.project_v_atom_mask,
                 },
             )
         if args.teacher_forced_mean:

@@ -444,3 +444,38 @@ def test_first_party_source_law_runner_is_bounded_and_fail_closed():
     assert runner.count("timeout --signal=TERM --kill-after=30s") >= 7
     assert 'cmp "$RUN_DIR/obs_ckpt_gate.json"' in runner
     assert "formal training was not started" in runner
+
+
+def test_v_mask_projection_runner_is_bounded_conditional_and_inference_only():
+    runner = Path(
+        "cloud/huawei/run_v_mask_projection_discriminator.sh"
+    ).read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-75}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 75 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
+    assert 'sudo -n shutdown -h now || shutdown_code=$?' in runner
+    assert 'CHECKPOINT=${CHECKPOINT:?set the existing source-law ckpt_1000.pt path}' in runner
+    assert 'CHECKPOINT_SHA256=${CHECKPOINT_SHA256:?set the frozen checkpoint SHA256}' in runner
+    assert "_verify_checkpoint_source_law" in runner
+    assert "run_eval 1 current" in runner
+    assert "run_eval 1 masked" in runner
+    assert runner.index("run_eval 1 masked") < runner.index(
+        'if [[ "$status" == ADVANCE_MASKED_H6 ]]'
+    )
+    assert "run_eval 6 current" in runner
+    assert "run_eval 6 masked" in runner
+    assert "--project-v-atom-mask" in runner
+    assert runner.count('"$PYTHON" -m scripts.adjudicate_v_mask_projection') == 2
+    assert '"$PYTHON" scripts/adjudicate_v_mask_projection.py' not in runner
+    assert '"twenty_domain_authorized":false' in runner
+    assert '"second_seed_authorized":false' in runner
+    assert '"confirmation_authorized":false' in runner
+    assert '"formal_training_authorized":false' in runner
+    assert "scripts/train_ddp.py" not in runner
+    assert "torchrun" not in runner.lower()
+    assert 'sha256sum -c "$RUN_DIR/audit_sha256.txt"' in runner
+    assert "training was not started" in runner
