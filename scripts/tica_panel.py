@@ -31,7 +31,7 @@ from deepjump.config import ModelConfig  # noqa: E402
 from deepjump.data import discover_domains  # noqa: E402
 from deepjump.data.mdcath import _DomainHandle  # noqa: E402
 from deepjump.model import DeepJumpLite  # noqa: E402
-from deepjump.representation import apply_layout  # noqa: E402
+from deepjump.representation import apply_layout, apply_model_layout  # noqa: E402
 from deepjump.utils import resolve_device, split_domains  # noqa: E402
 
 # ---- TICA helpers (shared with tica_eval) ----------------------------------
@@ -160,7 +160,9 @@ def draw_marginals(ax_top, ax_bot, real_tic, model_tic, xe, ye):
 # ---- ensemble generation ----------------------------------------------------
 
 @torch.no_grad()
-def build_domain(model, handle, temp, rep, device, starts, K, steps, sigma):
+def build_domain(
+    model, handle, temp, rep, device, starts, K, steps, sigma, *, canon_symmetric
+):
     layout = handle.layout
     N = layout.num_residues
     nf = handle.replicas(temp, [rep])[0][2]
@@ -183,7 +185,9 @@ def build_domain(model, handle, temp, rep, device, starts, K, steps, sigma):
     model_feats, ens_P = [], []
     for si, t0 in enumerate(start_idx):
         c = torch.from_numpy(np.asarray(handle.coords(temp, rep, int(t0))))
-        P0, V0 = apply_layout(c, layout)
+        P0, V0 = apply_model_layout(
+            c, layout, canon_symmetric=canon_symmetric
+        )
         P0 = (P0 - P0.mean(0, keepdim=True)).to(device)
         init = {"P_t": P0[None], "V_t": V0[None].to(device),
                 "res_index": torch.as_tensor(layout.res_index, device=device)[None],
@@ -236,8 +240,18 @@ def main():
     for f in chosen:
         h = _DomainHandle(f)
         print(f"  building {h.name} ...", flush=True)
-        blocks.append(build_domain(model, h, temp, rep, device,
-                                   args.starts, args.K, args.steps, args.sigma))
+        blocks.append(build_domain(
+            model,
+            h,
+            temp,
+            rep,
+            device,
+            args.starts,
+            args.K,
+            args.steps,
+            args.sigma,
+            canon_symmetric=bool(cd.get("canon_symmetric", False)),
+        ))
         h.close()
 
     # ---- layout: mimic the paper (blocks arranged in a grid) ----

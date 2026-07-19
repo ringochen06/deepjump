@@ -6,10 +6,11 @@ should be trusted until these pass.
 """
 
 import numpy as np
+import pytest
 import torch
 
-from deepjump.atom_constants import HEAVY_ATOM_ORDER, MAX_HEAVY
-from deepjump.representation import apply_layout, build_layout
+from deepjump.atom_constants import HEAVY_ATOM_INDEX, HEAVY_ATOM_ORDER, MAX_HEAVY
+from deepjump.representation import apply_layout, apply_model_layout, build_layout
 
 
 def _toy_topology():
@@ -92,3 +93,27 @@ def test_batched_frames():
     P, V = apply_layout(coords, layout)
     assert P.shape == (7, 3, 3)
     assert V.shape == (7, 3, MAX_HEAVY, 3)
+
+
+def test_apply_model_layout_matches_training_symmetric_canonicalization():
+    names = ["N", "CA", "C", "O", "CB", "CG", "OD1", "OD2"]
+    layout = build_layout(names, np.zeros(len(names), dtype=int), ["ASP"] * len(names))
+    coords = torch.zeros(len(names), 3)
+    coords[names.index("OD1"), 0] = 3.0
+    coords[names.index("OD2"), 0] = 1.0
+
+    _, raw = apply_model_layout(coords, layout, canon_symmetric=False)
+    _, canonical = apply_model_layout(coords, layout, canon_symmetric=True)
+    od1 = HEAVY_ATOM_INDEX["ASP"]["OD1"]
+    od2 = HEAVY_ATOM_INDEX["ASP"]["OD2"]
+
+    assert raw[0, od1, 0] == 3.0 and raw[0, od2, 0] == 1.0
+    assert canonical[0, od1, 0] == 1.0 and canonical[0, od2, 0] == 3.0
+
+
+def test_apply_model_layout_rejects_batched_frames():
+    names, resids, resnames = _toy_topology()
+    layout = build_layout(names, resids, resnames)
+    coords = torch.zeros(2, len(names), 3)
+    with pytest.raises(ValueError, match="one coordinate frame"):
+        apply_model_layout(coords, layout, canon_symmetric=True)

@@ -19,7 +19,7 @@ from deepjump.evaluation import (
     resolve_frozen_domains,
 )
 from deepjump.model import DeepJumpLite
-from deepjump.representation import apply_layout
+from deepjump.representation import apply_layout, apply_model_layout
 from deepjump.utils import resolve_device
 
 
@@ -158,7 +158,11 @@ def main() -> None:
         noop_features = []
         for start_index, frame in enumerate(starts):
             coords = torch.from_numpy(np.asarray(h.coords(temp, rep, int(frame))))
-            P, V = apply_layout(coords, layout)
+            P, V = apply_model_layout(
+                coords,
+                layout,
+                canon_symmetric=bool(cd.get("canon_symmetric", False)),
+            )
             P = P[residue_slice]
             V = V[residue_slice]
             P = P - P.mean(dim=0, keepdim=True)

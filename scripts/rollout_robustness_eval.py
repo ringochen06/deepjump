@@ -20,7 +20,7 @@ from deepjump.evaluation import (
 )
 from deepjump.metrics import aligned_ca_rmsd, contact_fraction_native
 from deepjump.model import DeepJumpLite
-from deepjump.representation import apply_layout
+from deepjump.representation import apply_model_layout
 from deepjump.sampling import rollout
 from deepjump.utils import resolve_device
 
@@ -88,6 +88,39 @@ def _local_geometry(pred: torch.Tensor, target: torch.Tensor, bond_mask: torch.T
     }
 
 
+def teacher_forced_mean_trajectory(
+    model,
+    real_positions: list[torch.Tensor],
+    real_vectors: list[torch.Tensor],
+    static: dict[str, torch.Tensor],
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Predict every horizon from its real preceding state, never model feedback."""
+    if len(real_positions) != len(real_vectors) or len(real_positions) < 2:
+        raise ValueError("teacher-forced inputs must have matching length >= 2")
+    trajectory = [(real_positions[0], real_vectors[0])]
+    for step in range(len(real_positions) - 1):
+        batch = {
+            "P_t": real_positions[step],
+            "V_t": real_vectors[step],
+            **static,
+        }
+        trajectory.append(model.sample(batch, steps=1, mode="mean"))
+    return trajectory
+
+
+def one_step_persistence_trajectory(
+    real_positions: list[torch.Tensor],
+    real_vectors: list[torch.Tensor],
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Use the preceding real frame as the prediction for each one-step target."""
+    if len(real_positions) != len(real_vectors) or len(real_positions) < 2:
+        raise ValueError("persistence inputs must have matching length >= 2")
+    return [
+        (real_positions[0], real_vectors[0]),
+        *list(zip(real_positions[:-1], real_vectors[:-1])),
+    ]
+
+
 @torch.no_grad()
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -107,6 +140,10 @@ def main() -> None:
     ap.add_argument("--tau-max", type=float, default=1.0)
     ap.add_argument("--terminal-denoise", action="store_true")
     ap.add_argument("--drift-anchor", choices=("state", "conditioner"), default="state")
+    ap.add_argument(
+        "--teacher-forced-mean", action="store_true",
+        help="Also evaluate deterministic one-step predictions from each real preceding frame.",
+    )
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
     if args.noise_sigma is not None and args.noise_sigma < 0:
@@ -148,18 +185,22 @@ def main() -> None:
         residue_slice = slice(offset, offset + n)
 
         real_by_step: list[list[torch.Tensor]] = [[] for _ in range(args.steps + 1)]
-        velocity_start = []
+        vectors_by_step: list[list[torch.Tensor]] = [[] for _ in range(args.steps + 1)]
         for start in starts:
             for step in range(args.steps + 1):
                 coords = torch.from_numpy(np.asarray(h.coords(temp, rep, int(start + step * delta))))
-                P, V = apply_layout(coords, layout)
+                P, V = apply_model_layout(
+                    coords,
+                    layout,
+                    canon_symmetric=bool(cd.get("canon_symmetric", False)),
+                )
                 P = _center(P[residue_slice])
                 real_by_step[step].append(P)
-                if step == 0:
-                    velocity_start.append(V[residue_slice])
+                vectors_by_step[step].append(V[residue_slice])
         real = [torch.stack(values).to(device) for values in real_by_step]
+        real_vectors = [torch.stack(values).to(device) for values in vectors_by_step]
         P0 = real[0]
-        V0 = torch.stack(velocity_start).to(device)
+        V0 = real_vectors[0]
         batch = {
             "P_t": P0,
             "V_t": V0,
@@ -174,7 +215,10 @@ def main() -> None:
             )[None].repeat(len(starts), 1),
         }
 
-        trajectories = {"noop": [(P0, V0)] * (args.steps + 1)}
+        trajectories = {
+            "noop": [(P0, V0)] * (args.steps + 1),
+            "one_step_persistence": one_step_persistence_trajectory(real, real_vectors),
+        }
         for method_index, method in enumerate(requested_methods):
             if method == "mean":
                 mode, ode_steps, generator = "mean", 1, None
@@ -193,17 +237,25 @@ def main() -> None:
                     "drift_anchor": args.drift_anchor,
                 },
             )
+        if args.teacher_forced_mean:
+            static = {
+                key: value for key, value in batch.items() if key not in {"P_t", "V_t"}
+            }
+            trajectories["teacher_forced_mean"] = teacher_forced_mean_trajectory(
+                model, real, real_vectors, static
+            )
 
         domain_methods = {}
         for method, trajectory in trajectories.items():
             metrics = {name: [] for name in (
-                "rmsd", "fnc", "bond_mean", "bond_p95", "bond_p99", "bond_max",
+                "rmsd", "rmsd_by_start", "fnc", "bond_mean", "bond_p95", "bond_p99", "bond_max",
                 "bond_mae_real", "angle_cos_mae_real",
             )}
             for step, (pred, _) in enumerate(trajectory):
                 rmsd = [aligned_ca_rmsd(pred[i], real[step][i]).item() for i in range(len(starts))]
                 fnc = contact_fraction_native(pred, real[step], batch["residue_mask"])
                 metrics["rmsd"].append(float(np.mean(rmsd)))
+                metrics["rmsd_by_start"].append([float(value) for value in rmsd])
                 metrics["fnc"].append(float(fnc.mean().item()))
                 geometry = _local_geometry(pred, real[step], batch["bond_mask"])
                 for name, value in geometry.items():
@@ -219,11 +271,16 @@ def main() -> None:
         })
         h.close()
 
-    methods = ["noop", *requested_methods]
+    methods = ["noop", "one_step_persistence", *requested_methods]
+    if args.teacher_forced_mean:
+        methods.append("teacher_forced_mean")
     result = {
         "checkpoint": args.ckpt,
         "checkpoint_step": ck["step"],
         "settings": vars(args),
+        "preprocessing": {
+            "canon_symmetric": bool(cd.get("canon_symmetric", False)),
+        },
         "delta_frames": delta,
         "domain_panel": {
             "path": args.domain_list,

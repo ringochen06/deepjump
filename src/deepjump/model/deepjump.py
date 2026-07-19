@@ -26,6 +26,7 @@ class DeepJumpLite(nn.Module):
         super().__init__()
         self.cfg = cfg
         self.noise_sigma = noise_sigma
+        self.noise_sigma_v = getattr(cfg, "source_noise_sigma_v", None)
         self.predict_heavy = predict_heavy
         self.input_aug_sigma = getattr(cfg, "input_aug_sigma", 0.0)
         self.source_noise_v = getattr(cfg, "source_noise_v", False)
@@ -62,6 +63,12 @@ class DeepJumpLite(nn.Module):
             num_layers=cfg.transport_layers, predict_heavy=predict_heavy, **common
         )
 
+    def _vector_source_noise_sigma(self) -> float:
+        """Return the V-source sigma while preserving legacy shared-sigma behavior."""
+        if self.noise_sigma_v is None:
+            return self.noise_sigma
+        return self.noise_sigma_v
+
     # ---- pieces -------------------------------------------------------------
     def encode(self, batch):
         return self.conditioner(
@@ -83,7 +90,7 @@ class DeepJumpLite(nn.Module):
                 raise ValueError("source_noise_v requires atom_mask")
             v_noise = torch.randn(V_t.shape, generator=generator, device=V_t.device)
             v_noise = v_noise * atom_mask.unsqueeze(-1)
-            V0 = V_t + self.noise_sigma * v_noise
+            V0 = V_t + self._vector_source_noise_sigma() * v_noise
         else:
             V0 = V_t
         aP = tau.view(-1, 1, 1)
@@ -177,7 +184,7 @@ class DeepJumpLite(nn.Module):
                 raise ValueError("source_noise_v requires atom_mask")
             v_noise = torch.randn(V_t.shape, generator=generator).to(device)
             v_noise = v_noise * batch["atom_mask"].unsqueeze(-1)
-            V = V_t + self.noise_sigma * v_noise
+            V = V_t + self._vector_source_noise_sigma() * v_noise
         else:
             V = V_t.clone()
         taus = torch.linspace(0, tau_max, steps + 1, device=device)

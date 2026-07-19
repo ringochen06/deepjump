@@ -25,7 +25,7 @@ from deepjump.config import ModelConfig  # noqa: E402
 from deepjump.data import discover_domains  # noqa: E402
 from deepjump.data.mdcath import _DomainHandle  # noqa: E402
 from deepjump.model import DeepJumpLite  # noqa: E402
-from deepjump.representation import apply_layout  # noqa: E402
+from deepjump.representation import apply_layout, apply_model_layout  # noqa: E402
 from deepjump.sampling import rollout  # noqa: E402
 from deepjump.utils import resolve_device, split_domains  # noqa: E402
 
@@ -125,7 +125,11 @@ def main():
     model_feats, start_feats = [], []
     for si, t0 in enumerate(starts):
         c = torch.from_numpy(np.asarray(h.coords(temp, rep, int(t0))))
-        P0, V0 = apply_layout(c, layout)
+        P0, V0 = apply_model_layout(
+            c,
+            layout,
+            canon_symmetric=bool(cd.get("canon_symmetric", False)),
+        )
         P0 = (P0 - P0.mean(0, keepdim=True)).to(device)
         init = {"P_t": P0[None], "V_t": V0[None].to(device),
                 "res_index": torch.as_tensor(layout.res_index, device=device)[None],

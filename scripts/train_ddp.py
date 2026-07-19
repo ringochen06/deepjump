@@ -107,7 +107,9 @@ def evaluate(model, loader, device, cfg, amp_dtype, max_batches=None):
     model.eval()
     core = model.module if hasattr(model, "module") else model
     saved = core.noise_sigma
+    saved_v = core.noise_sigma_v
     core.noise_sigma = 0.0
+    core.noise_sigma_v = 0.0
     losses, rmsds, noop = [], [], []
     for i, batch in enumerate(loader):
         if max_batches is not None and i >= max_batches:
@@ -121,6 +123,7 @@ def evaluate(model, loader, device, cfg, amp_dtype, max_batches=None):
         rmsds.append(masked_ca_rmsd(out["P_hat_1"].float(), batch["P_1"], batch["residue_mask"]).mean().item())
         noop.append(masked_ca_rmsd(batch["P_t"], batch["P_1"], batch["residue_mask"]).mean().item())
     core.noise_sigma = saved
+    core.noise_sigma_v = saved_v
     model.train()
     return {"val_loss": sum(losses) / len(losses), "val_rmsd": sum(rmsds) / len(rmsds),
             "noop_rmsd": sum(noop) / len(noop)}

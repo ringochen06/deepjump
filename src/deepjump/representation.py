@@ -126,6 +126,24 @@ def apply_layout(coords, layout: AtomLayout):
     return P, V
 
 
+def apply_model_layout(
+    coords, layout: AtomLayout, *, canon_symmetric: bool
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build a single model input frame with training-identical atom-slot semantics.
+
+    Direct evaluators bypass :class:`MdcathPairDataset`, so they must explicitly
+    apply the same symmetric-sidechain canonicalization used by training.  Keep
+    this helper single-frame-only because ``canonicalize_symmetric`` indexes the
+    residue dimension directly; callers handling frame batches must iterate.
+    """
+    P, V = apply_layout(coords, layout)
+    if V.ndim != 3:
+        raise ValueError("apply_model_layout expects one coordinate frame")
+    if canon_symmetric:
+        V = canonicalize_symmetric(V, layout.res_index)
+    return P, V
+
+
 def kabsch_rotation(P: torch.Tensor, Q: torch.Tensor) -> torch.Tensor:
     """Optimal rotation R (3x3) that best superimposes centered P onto centered Q.
 

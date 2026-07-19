@@ -15,6 +15,14 @@ class PerfectEndpointModel(DeepJumpLite):
         return P_1, V_1
 
 
+class IdentityEndpointModel(DeepJumpLite):
+    def encode(self, batch):
+        return None
+
+    def predict_x1(self, P_tau, V_tau, tau, ctx, P_t, V_t, residue_mask):
+        return P_tau, V_tau
+
+
 def _batch():
     return {
         "P_t": torch.zeros(2, 4, 3),
@@ -87,6 +95,57 @@ def test_source_noise_v_is_configurable_and_backward_compatible():
     assert torch.equal(legacy_v, batch["V_t"])
     assert not torch.equal(joint_v, batch["V_t"])
     assert torch.isfinite(joint_v).all()
+
+
+def test_source_noise_v_supports_an_independent_first_party_scale():
+    batch = _batch()
+    tau0 = torch.zeros(2)
+    shared = DeepJumpLite(
+        ModelConfig(source_noise_v=True), noise_sigma=1.5
+    )
+    separate = DeepJumpLite(
+        ModelConfig(source_noise_v=True, source_noise_sigma_v=1.0), noise_sigma=1.5
+    )
+    _, shared_v = shared.interpolate(
+        batch["P_t"], batch["V_t"], batch["P_t"], batch["V_t"], tau0,
+        torch.Generator().manual_seed(13), atom_mask=batch["atom_mask"],
+    )
+    _, separate_v = separate.interpolate(
+        batch["P_t"], batch["V_t"], batch["P_t"], batch["V_t"], tau0,
+        torch.Generator().manual_seed(13), atom_mask=batch["atom_mask"],
+    )
+
+    shared_delta = shared_v - batch["V_t"]
+    separate_delta = separate_v - batch["V_t"]
+    assert torch.allclose(shared_delta, 1.5 * separate_delta, atol=1e-6, rtol=1e-6)
+
+
+def test_legacy_vector_source_sigma_tracks_runtime_coordinate_override():
+    model = DeepJumpLite(ModelConfig(source_noise_v=True), noise_sigma=0.1)
+    assert model._vector_source_noise_sigma() == 0.1
+    model.noise_sigma = 0.0
+    assert model._vector_source_noise_sigma() == 0.0
+
+
+def test_sampling_uses_the_independent_vector_source_scale():
+    batch = _batch()
+    unit = IdentityEndpointModel(
+        ModelConfig(source_noise_v=True, source_noise_sigma_v=1.0),
+        noise_sigma=1.5, predict_heavy=True,
+    ).eval()
+    half = IdentityEndpointModel(
+        ModelConfig(source_noise_v=True, source_noise_sigma_v=0.5),
+        noise_sigma=1.5, predict_heavy=True,
+    ).eval()
+    P_unit, V_unit = unit.sample(
+        batch, steps=1, generator=torch.Generator().manual_seed(17)
+    )
+    P_half, V_half = half.sample(
+        batch, steps=1, generator=torch.Generator().manual_seed(17)
+    )
+
+    assert torch.equal(P_unit, P_half)
+    assert torch.allclose(V_unit, 2.0 * V_half, atol=1e-6, rtol=1e-6)
 
 
 def test_source_noise_v_does_not_create_missing_atoms():
