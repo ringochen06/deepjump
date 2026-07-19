@@ -29,7 +29,7 @@ from deepjump.data.mdcath import _DomainHandle  # noqa: E402
 from deepjump.data import discover_domains  # noqa: E402
 from deepjump.metrics import aligned_ca_rmsd, ca_bond_stats, contact_fraction_native  # noqa: E402
 from deepjump.model import DeepJumpLite  # noqa: E402
-from deepjump.representation import apply_layout  # noqa: E402
+from deepjump.representation import apply_model_layout  # noqa: E402
 from deepjump.utils import resolve_device, split_domains  # noqa: E402
 
 
@@ -42,12 +42,16 @@ def load_model(ckpt, device):
     return model, ck["cfg"]
 
 
-def real_frames(handle, temp, rep, t0, n_steps, delta, layout, device):
+def real_frames(
+    handle, temp, rep, t0, n_steps, delta, layout, device, *, canon_symmetric
+):
     """Return list of (P,V) for real frames t0, t0+delta, ..., centered per frame."""
     out = []
     for k in range(n_steps + 1):
         c = torch.from_numpy(np.asarray(handle.coords(temp, rep, t0 + k * delta)))
-        P, V = apply_layout(c, layout)
+        P, V = apply_model_layout(
+            c, layout, canon_symmetric=canon_symmetric
+        )
         P = P - P.mean(0, keepdim=True)
         out.append((P.to(device), V.to(device)))
     return out
@@ -92,7 +96,17 @@ def main():
     gen = torch.Generator(device="cpu")
 
     for si, t0 in enumerate(starts):
-        real = real_frames(handle, temp, rep, t0, args.steps, delta, layout, device)
+        real = real_frames(
+            handle,
+            temp,
+            rep,
+            t0,
+            args.steps,
+            delta,
+            layout,
+            device,
+            canon_symmetric=bool(cd.get("canon_symmetric", False)),
+        )
         P0, V0 = real[0]
         mask = torch.ones(1, N, dtype=torch.bool, device=device)
         init = {

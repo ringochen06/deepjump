@@ -27,7 +27,7 @@ from deepjump.evaluation import (
     resolve_frozen_domains,
 )
 from deepjump.model import DeepJumpLite
-from deepjump.representation import apply_layout
+from deepjump.representation import apply_layout, apply_model_layout
 from deepjump.sampling import rollout
 from deepjump.utils import resolve_device
 
@@ -98,7 +98,11 @@ def _evaluate_cell(
         coordinates = torch.from_numpy(
             np.asarray(handle.coords(temperature, replica, int(frame)))
         )
-        positions, velocities = apply_layout(coordinates, layout)
+        positions, velocities = apply_model_layout(
+            coordinates,
+            layout,
+            canon_symmetric=bool(data_cfg.get("canon_symmetric", False)),
+        )
         start_positions.append(_center(positions[residue_slice]))
         start_velocities.append(velocities[residue_slice])
     initial_positions = torch.stack(start_positions).to(device)

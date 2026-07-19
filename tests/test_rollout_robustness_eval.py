@@ -1,7 +1,13 @@
 import numpy as np
 import torch
 
-from scripts.rollout_robustness_eval import _local_geometry, select_validation_domains, summarize_domains
+from scripts.rollout_robustness_eval import (
+    _local_geometry,
+    one_step_persistence_trajectory,
+    select_validation_domains,
+    summarize_domains,
+    teacher_forced_mean_trajectory,
+)
 from deepjump.sampling import _static_fields
 
 
@@ -47,3 +53,36 @@ def test_rollout_static_fields_preserve_atom_mask_for_joint_source_noise():
         "atom_mask": torch.ones(1, 3, 13, dtype=torch.bool),
     }
     assert _static_fields(batch)["atom_mask"] is batch["atom_mask"]
+
+
+class _OffsetModel:
+    def __init__(self):
+        self.inputs = []
+
+    def sample(self, batch, *, steps, mode):
+        assert steps == 1 and mode == "mean"
+        self.inputs.append(batch["P_t"].clone())
+        return batch["P_t"] + 10.0, batch["V_t"]
+
+
+def test_teacher_forced_trajectory_uses_each_real_preceding_state():
+    model = _OffsetModel()
+    positions = [torch.full((1, 2, 3), float(step)) for step in range(4)]
+    vectors = [torch.full((1, 2, 13, 3), float(step)) for step in range(4)]
+    static = {"residue_mask": torch.ones(1, 2, dtype=torch.bool)}
+
+    trajectory = teacher_forced_mean_trajectory(model, positions, vectors, static)
+
+    assert len(trajectory) == 4
+    assert [value[0, 0, 0].item() for value in model.inputs] == [0.0, 1.0, 2.0]
+    assert [frame[0][0, 0, 0].item() for frame in trajectory] == [0.0, 10.0, 11.0, 12.0]
+
+
+def test_one_step_persistence_uses_preceding_real_frame():
+    positions = [torch.full((1, 2, 3), float(step)) for step in range(4)]
+    vectors = [torch.full((1, 2, 13, 3), float(step)) for step in range(4)]
+
+    trajectory = one_step_persistence_trajectory(positions, vectors)
+
+    assert len(trajectory) == 4
+    assert [frame[0][0, 0, 0].item() for frame in trajectory] == [0.0, 0.0, 1.0, 2.0]

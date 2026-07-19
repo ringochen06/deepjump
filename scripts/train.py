@@ -61,7 +61,9 @@ def evaluate(model, loader, device, cfg, max_batches=20):
     """
     model.eval()
     saved_sigma = model.noise_sigma
+    saved_sigma_v = model.noise_sigma_v
     model.noise_sigma = 0.0
+    model.noise_sigma_v = 0.0
     losses, rmsds, noop_rmsds = [], [], []
     for i, batch in enumerate(loader):
         if i >= max_batches:
@@ -76,6 +78,7 @@ def evaluate(model, loader, device, cfg, max_batches=20):
         rmsds.append(masked_ca_rmsd(out["P_hat_1"], batch["P_1"], batch["residue_mask"]).mean().item())
         noop_rmsds.append(masked_ca_rmsd(batch["P_t"], batch["P_1"], batch["residue_mask"]).mean().item())
     model.noise_sigma = saved_sigma
+    model.noise_sigma_v = saved_sigma_v
     model.train()
     return {
         "val_loss": sum(losses) / len(losses),
@@ -165,6 +168,7 @@ def main():
     if args.fast_dev:
         # Sanity: a single batch, no noise -> loss must collapse toward 0.
         model.noise_sigma = 0.0
+        model.noise_sigma_v = 0.0
         batch = move_batch(next(iter(train_loader)), device)
         initial = fast_dev_metrics(model, batch, cfg)
         print(

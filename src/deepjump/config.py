@@ -40,10 +40,12 @@ class ModelConfig:
     predict_heavy: bool = False  # also predict heavy-atom offsets V_hat_1
     input_aug_sigma: float = 0.0  # train-time noise on conditioner input X_t (rollout robustness)
     source_noise_v: bool = False  # apply stochastic-interpolant source noise to heavy offsets too
+    source_noise_sigma_v: float | None = None  # V-source sigma; None reuses data.noise_sigma
     vector_qk: bool = False  # gated vector-channel contribution to attention q/k logits
     tensor_qkv: bool = False  # Algorithm-1 joint scalar/vector Tensor-Cloud q/k/v
     paper_ff: bool = False  # Algorithm-2-style F=2 scalar/vector feed-forward
     tensor_cloud01: bool = False  # dedicated equal-multiplicity l=0/l=1 Algorithm-1/2 path
+    tensor_cloud01_vector_only_attention: bool = False  # omit scalar q/k/v attention branch
 
 
 @dataclass
@@ -74,6 +76,7 @@ class TrainConfig:
     amp_dtype: str = "bf16"  # bf16 (A100, no scaler) or fp16 (V100, needs GradScaler)
     lr_final: float = 0.0  # if >0, linearly decay lr -> lr_final over max_steps (paper: 5e-3->3e-3)
     warmup_steps: int = 0  # linear LR warmup
+    lr_horizon_steps: int = 0  # optional LR horizon independent of bounded run length
     ckpt_every: int = 5000  # steps between full (model+opt+sched) checkpoints
     keep_last_k: int = 3  # rolling checkpoints to keep
     resume: str = ""  # path to a checkpoint to resume optimizer/scheduler/step from

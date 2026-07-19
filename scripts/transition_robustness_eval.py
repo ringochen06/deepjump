@@ -27,7 +27,7 @@ from deepjump.evaluation import (
     weighted_row_jsd_bits,
 )
 from deepjump.model import DeepJumpLite
-from deepjump.representation import apply_layout
+from deepjump.representation import apply_layout, apply_model_layout
 from deepjump.utils import resolve_device
 try:
     from scripts.tica_robustness_eval import (
@@ -169,7 +169,11 @@ def _evaluate_cell(
         coordinates1 = torch.from_numpy(
             np.asarray(handle.coords(temperature, replica, int(frame + delta)))
         )
-        positions0, velocities0 = apply_layout(coordinates0, layout)
+        positions0, velocities0 = apply_model_layout(
+            coordinates0,
+            layout,
+            canon_symmetric=bool(data_cfg.get("canon_symmetric", False)),
+        )
         positions1, _ = apply_layout(coordinates1, layout)
         positions0 = positions0[residue_slice]
         velocities0 = velocities0[residue_slice]
@@ -256,6 +260,55 @@ def _evaluate_cell(
         "self_energy_distance_floor": self_floor,
         "methods": cell_methods,
     }
+
+
+def summarize_transition_methods(rows, methods, seed):
+    """Build domain-balanced summaries with positive no-op-minus-model gains."""
+    summary = {}
+    for method in ["noop", *methods]:
+        summary[method] = {
+            "mean_energy_score": float(np.mean([
+                row["methods"][method]["mean_energy_score"] for row in rows
+            ])),
+            "mean_transition_energy_distance": float(np.mean([
+                row["methods"][method]["transition_energy_distance"] for row in rows
+            ])),
+            "mean_msm_row_jsd_bits": float(np.mean([
+                row["methods"][method]["msm_row_jsd_bits"] for row in rows
+            ])),
+            "domains_better_than_noop_score": sum(
+                row["methods"][method]["mean_energy_score"]
+                < row["methods"]["noop"]["mean_energy_score"] for row in rows
+            ) if method != "noop" else 0,
+            "domains_better_than_noop_transition": sum(
+                row["methods"][method]["transition_energy_distance"]
+                < row["methods"]["noop"]["transition_energy_distance"] for row in rows
+            ) if method != "noop" else 0,
+            "domains_better_than_noop_msm": sum(
+                row["methods"][method]["msm_row_jsd_bits"]
+                < row["methods"]["noop"]["msm_row_jsd_bits"] for row in rows
+            ) if method != "noop" else 0,
+        }
+        if method != "noop":
+            summary[method]["paired_energy_score_gain"] = paired_domain_bootstrap_gain(
+                np.asarray([
+                    row["methods"][method]["mean_energy_score"] for row in rows
+                ]),
+                np.asarray([
+                    row["methods"]["noop"]["mean_energy_score"] for row in rows
+                ]),
+                seed=seed,
+            )
+            summary[method]["paired_msm_row_jsd_gain"] = paired_domain_bootstrap_gain(
+                np.asarray([
+                    row["methods"][method]["msm_row_jsd_bits"] for row in rows
+                ]),
+                np.asarray([
+                    row["methods"]["noop"]["msm_row_jsd_bits"] for row in rows
+                ]),
+                seed=seed + 1,
+            )
+    return summary
 
 
 @torch.no_grad()
@@ -376,50 +429,7 @@ def main() -> None:
         })
         handle.close()
 
-    summary = {}
-    for method in ["noop", *methods]:
-        summary[method] = {
-            "mean_energy_score": float(np.mean([
-                row["methods"][method]["mean_energy_score"] for row in rows
-            ])),
-            "mean_transition_energy_distance": float(np.mean([
-                row["methods"][method]["transition_energy_distance"] for row in rows
-            ])),
-            "mean_msm_row_jsd_bits": float(np.mean([
-                row["methods"][method]["msm_row_jsd_bits"] for row in rows
-            ])),
-            "domains_better_than_noop_score": sum(
-                row["methods"][method]["mean_energy_score"]
-                < row["methods"]["noop"]["mean_energy_score"] for row in rows
-            ) if method != "noop" else 0,
-            "domains_better_than_noop_transition": sum(
-                row["methods"][method]["transition_energy_distance"]
-                < row["methods"]["noop"]["transition_energy_distance"] for row in rows
-            ) if method != "noop" else 0,
-            "domains_better_than_noop_msm": sum(
-                row["methods"][method]["msm_row_jsd_bits"]
-                < row["methods"]["noop"]["msm_row_jsd_bits"] for row in rows
-            ) if method != "noop" else 0,
-        }
-        if method != "noop":
-            summary[method]["paired_energy_score_gain"] = paired_domain_bootstrap_gain(
-                np.asarray([
-                    row["methods"][method]["mean_energy_score"] for row in rows
-                ]),
-                np.asarray([
-                    row["methods"]["noop"]["mean_energy_score"] for row in rows
-                ]),
-                seed=args.seed,
-            )
-            summary[method]["paired_msm_row_jsd_gain"] = paired_domain_bootstrap_gain(
-                np.asarray([
-                    row["methods"][method]["msm_row_jsd_bits"] for row in rows
-                ]),
-                np.asarray([
-                    row["methods"]["noop"]["msm_row_jsd_bits"] for row in rows
-                ]),
-                seed=args.seed + 1,
-            )
+    summary = summarize_transition_methods(rows, methods, args.seed)
     result = {
         "checkpoint": args.ckpt,
         "checkpoint_step": ck["step"],
