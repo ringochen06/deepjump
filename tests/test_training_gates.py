@@ -282,6 +282,29 @@ def test_tensorcloud01_calibration_runner_is_bounded_and_delta_scoped():
     assert "vector-only calibration is frozen to delta=1" in runner
 
 
+def test_dev20_endpoint_runner_is_evaluation_only_bounded_and_readback_closed():
+    runner = Path("cloud/huawei/run_twenty_domain_endpoint_gate.sh").read_text()
+
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-75}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 75 ]]' in runner
+    assert runner.index("systemd-run") < runner.index("nvidia-smi")
+    assert "scripts/endpoint_panel_eval.py" in runner
+    assert "--starts 3" in runner
+    assert '--runtime-probe-output "$RUN_DIR/runtime_probe.json"' in runner
+    assert "runtime_probe.json panel.json panel.log" in runner
+    assert "scripts.adjudicate_endpoint_panel" in runner
+    assert "tests/test_endpoint_panel_adjudication.py" in runner
+    assert "configs/dev_20_length_proportional_seed0.txt" in runner
+    assert "4fd7015951fc48598d7beb888670d701b39697cdf62c2982a95b2b7b243474af" in runner
+    assert "train_ddp.py" not in runner
+    assert "scripts/train.py" not in runner
+    assert 'second_seed_authorized":false' in runner
+    assert 'formal_training_authorized":false' in runner
+    assert "sha256sum -c \"$RUN_DIR/audit_sha256.txt\"" in runner
+    assert "readback_completion.sha256" in runner
+    assert "sudo -n shutdown -h now" in runner
+
+
 def test_vector_only_numerics_discriminator_is_bounded_and_two_arm_scoped():
     runner = Path("cloud/huawei/run_vector_only_step221_discriminator.sh").read_text()
     assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
