@@ -34,6 +34,7 @@ class Transport(nn.Module):
         tensor_qkv: bool = False,
         paper_ff: bool = False,
         tensor_cloud01: bool = False,
+        tensor_cloud01_vector_only_attention: bool = False,
     ):
         super().__init__()
         self.predict_heavy = predict_heavy
@@ -46,7 +47,8 @@ class Transport(nn.Module):
                 raise ValueError("tensor_cloud01 requires vector_channels == hidden")
             self.blocks = nn.ModuleList(
                 TensorCloud01Block(
-                    hidden, num_heads, seq_ks, num_dist_basis, dist_cutoff
+                    hidden, num_heads, seq_ks, num_dist_basis, dist_cutoff,
+                    vector_only_attention=tensor_cloud01_vector_only_attention,
                 )
                 for _ in range(num_layers)
             )

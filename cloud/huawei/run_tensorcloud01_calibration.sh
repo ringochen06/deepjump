@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run exactly one fresh-init, 1000-step TensorCloud01 calibration on eight V100s.
+# Run exactly one fresh-init, 1000-step vector-only TensorCloud01 delta=1
+# calibration on eight V100s.
 # This fail-closed diagnostic never starts formal training and powers the instance
 # off on every exit path.
 set -euo pipefail
@@ -8,38 +9,11 @@ REPO=${REPO:-/data/deepjump}
 PYTHON=${PYTHON:-/data/venvs/deepjump/bin/python}
 TORCHRUN=${TORCHRUN:-/data/venvs/deepjump/bin/torchrun}
 DATA_ROOT=${DATA_ROOT:-/data/mdcath}
-BUCKET=${BUCKET:?set BUCKET=obs://your-bucket-name}
-EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?set EXPECTED_REPO_COMMIT to the reviewed deployed SHA}
+# Always import the reviewed deployment, never a stale site-packages checkout.
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 EXPECTED_HOSTNAME=${EXPECTED_HOSTNAME:?set EXPECTED_HOSTNAME to the authorized GPU instance hostname}
 SHUTDOWN_ON_EXIT=${SHUTDOWN_ON_EXIT:?set SHUTDOWN_ON_EXIT=1 for the authorized bounded run}
-DELTA=${DELTA:?set DELTA to exactly one of 1, 10, or 100}
 HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-30}
-TRAIN_TIMEOUT_MINUTES=${TRAIN_TIMEOUT_MINUTES:-24}
-RUN_ID=${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
-OBS_RUN_PREFIX=${OBS_RUN_PREFIX:-deepjump-calibration/tensorcloud01}
-
-case "$DELTA" in
-  1)
-    CONFIG=configs/v100_tensorcloud01_d1_calibration.yaml
-    CALIBRATION_DIR="$REPO/runs/v100_tensorcloud01_d1_calibration"
-    ;;
-  10)
-    CONFIG=configs/v100_tensorcloud01_d10_calibration.yaml
-    CALIBRATION_DIR="$REPO/runs/v100_tensorcloud01_d10_calibration"
-    ;;
-  100)
-    CONFIG=configs/v100_tensorcloud01_d100_calibration.yaml
-    CALIBRATION_DIR="$REPO/runs/v100_tensorcloud01_d100_calibration"
-    ;;
-  *)
-    printf 'unsupported DELTA=%s; expected exactly 1, 10, or 100\n' "$DELTA" >&2
-    exit 2
-    ;;
-esac
-
-RUN_DIR="$REPO/runs/tensorcloud01_d${DELTA}_calibration_audit_$RUN_ID"
-READBACK_DIR="/tmp/tensorcloud01_d${DELTA}_calibration_readback_$RUN_ID"
-OBS_DST="$BUCKET/$OBS_RUN_PREFIX/delta$DELTA/$RUN_ID"
 
 [[ "$SHUTDOWN_ON_EXIT" == 1 ]] || {
   printf 'refusing unbounded run: SHUTDOWN_ON_EXIT must be 1\n' >&2
@@ -49,10 +23,6 @@ OBS_DST="$BUCKET/$OBS_RUN_PREFIX/delta$DELTA/$RUN_ID"
   printf 'refusing changed hard stop: HARD_STOP_MINUTES must be 30\n' >&2
   exit 2
 }
-[[ "$TRAIN_TIMEOUT_MINUTES" -le 24 ]] || {
-  printf 'refusing training timeout above 24 minutes\n' >&2
-  exit 2
-}
 [[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]] || {
   printf 'hostname mismatch: actual=%s expected=%s\n' "$(hostname)" "$EXPECTED_HOSTNAME" >&2
   exit 2
@@ -60,17 +30,23 @@ OBS_DST="$BUCKET/$OBS_RUN_PREFIX/delta$DELTA/$RUN_ID"
 
 shutdown_on_exit() {
   code=$?
+  shutdown_code=0
   trap - EXIT
-  if [[ "$code" != 0 ]] && command -v obsutil >/dev/null; then
+  if [[ "$code" != 0 ]] && [[ -n "${RUN_DIR:-}" ]] && command -v obsutil >/dev/null; then
     set +e
     printf 'calibration failed; best-effort evidence archive start=%s\n' "$(date -Is)"
-    [[ -d "$RUN_DIR" ]] && timeout 120s obsutil sync "$RUN_DIR" "$OBS_DST/failure/audit"
-    [[ -d "$CALIBRATION_DIR" ]] && timeout 120s obsutil sync "$CALIBRATION_DIR" "$OBS_DST/failure/calibration"
+    [[ -d "$RUN_DIR" ]] && timeout 120s obsutil sync "$RUN_DIR" "${OBS_DST:-}/failure/audit"
+    [[ -n "${CALIBRATION_DIR:-}" ]] && [[ -d "$CALIBRATION_DIR" ]] && \
+      timeout 120s obsutil sync "$CALIBRATION_DIR" "${OBS_DST:-}/failure/calibration"
     set -e
   fi
   printf 'calibration delta=%s exit=%s; requesting immediate shutdown at %s\n' \
-    "$DELTA" "$code" "$(date -Is)"
-  sudo -n shutdown -h now || printf 'ERROR: immediate shutdown command failed\n' >&2
+    "${DELTA:-unknown}" "$code" "$(date -Is)"
+  sudo -n shutdown -h now || shutdown_code=$?
+  if [[ "$shutdown_code" != 0 ]]; then
+    printf 'ERROR: immediate shutdown command failed with exit=%s\n' "$shutdown_code" >&2
+    [[ "$code" != 0 ]] || code=$shutdown_code
+  fi
   exit "$code"
 }
 trap shutdown_on_exit EXIT
@@ -78,12 +54,52 @@ trap shutdown_on_exit EXIT
 # Defense in depth: this independent timer survives a hung child process.
 sudo -n shutdown -h "+$HARD_STOP_MINUTES"
 
+# Require all run-specific inputs only after the independent hard stop is armed.
+BUCKET=${BUCKET:?set BUCKET=obs://your-bucket-name}
+EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?set EXPECTED_REPO_COMMIT to the reviewed deployed SHA}
+DELTA=${DELTA:?set DELTA to exactly 1}
+TRAIN_TIMEOUT_MINUTES=${TRAIN_TIMEOUT_MINUTES:-24}
+RUN_ID=${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
+OBS_RUN_PREFIX=${OBS_RUN_PREFIX:-deepjump-calibration/tensorcloud01}
+LR_PROFILE=${LR_PROFILE:-reference}
+
+[[ "$DELTA" == 1 ]] || {
+  printf 'unsupported DELTA=%s; vector-only calibration is frozen to delta=1\n' "$DELTA" >&2
+  exit 2
+}
+[[ "$TRAIN_TIMEOUT_MINUTES" -le 24 ]] || {
+  printf 'refusing training timeout above 24 minutes\n' >&2
+  exit 2
+}
+case "$LR_PROFILE" in
+  reference)
+    CONFIG=configs/v100_tensorcloud01_vector_only_d1_calibration.yaml
+    CALIBRATION_DIR="$REPO/runs/v100_tensorcloud01_vector_only_d1_calibration"
+    ;;
+  lowlr)
+    CONFIG=configs/v100_tensorcloud01_vector_only_d1_lowlr_calibration.yaml
+    CALIBRATION_DIR="$REPO/runs/v100_tensorcloud01_vector_only_d1_lowlr_calibration"
+    ;;
+  fp32)
+    CONFIG=configs/v100_tensorcloud01_vector_only_d1_fp32_calibration.yaml
+    CALIBRATION_DIR="$REPO/runs/v100_tensorcloud01_vector_only_d1_fp32_calibration"
+    ;;
+  *)
+    printf 'unsupported LR_PROFILE=%s; expected reference, lowlr, or fp32\n' "$LR_PROFILE" >&2
+    exit 2
+    ;;
+esac
+
+RUN_DIR="$REPO/runs/tensorcloud01_d${DELTA}_calibration_audit_$RUN_ID"
+READBACK_DIR="/tmp/tensorcloud01_d${DELTA}_calibration_readback_$RUN_ID"
+OBS_DST="$BUCKET/$OBS_RUN_PREFIX/$LR_PROFILE/delta$DELTA/$RUN_ID"
+
 cd "$REPO"
 mkdir -p "$RUN_DIR"
 exec > >(tee -a "$RUN_DIR/calibration.log") 2>&1
 
-printf 'run_id=%s delta=%s start=%s hard_stop_minutes=%s train_timeout_minutes=%s obs_dst=%s\n' \
-  "$RUN_ID" "$DELTA" "$(date -Is)" "$HARD_STOP_MINUTES" "$TRAIN_TIMEOUT_MINUTES" "$OBS_DST"
+printf 'run_id=%s delta=%s lr_profile=%s start=%s hard_stop_minutes=%s train_timeout_minutes=%s obs_dst=%s\n' \
+  "$RUN_ID" "$DELTA" "$LR_PROFILE" "$(date -Is)" "$HARD_STOP_MINUTES" "$TRAIN_TIMEOUT_MINUTES" "$OBS_DST"
 
 command -v obsutil >/dev/null
 [[ -x "$PYTHON" ]] || { printf 'missing python: %s\n' "$PYTHON" >&2; exit 2; }
@@ -120,7 +136,16 @@ nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
 "$PYTHON" -c 'import torch; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 8; print(torch.__version__, torch.version.cuda, torch.cuda.device_count())'
 
 printf 'gate=tests start=%s\n' "$(date -Is)"
-"$PYTHON" -m pytest -q | tee "$RUN_DIR/pytest.log"
+timeout --signal=TERM --kill-after=30s 8m \
+  "$PYTHON" -m pytest -q \
+  tests/test_tensor_cloud01.py \
+  tests/test_cloud_configs.py \
+  tests/test_training_gates.py \
+  tests/test_select_calibration_checkpoints.py \
+  tests/test_scientific_evaluation_gate.py \
+  tests/test_transition_robustness_eval.py \
+  tests/test_audit_mdcath_staging.py \
+  2>&1 | tee "$RUN_DIR/pytest.log"
 
 printf 'gate=data_audit start=%s\n' "$(date -Is)"
 "$PYTHON" scripts/audit_mdcath_staging.py \
@@ -140,7 +165,7 @@ timeout --signal=TERM --kill-after=2m "${TRAIN_TIMEOUT_MINUTES}m" \
   scripts/train_ddp.py --config "$CONFIG" \
   2>&1 | tee "$RUN_DIR/train.log"
 
-grep -q 'world=8 params=4,840,032 effective_batch=128' "$RUN_DIR/train.log"
+grep -q 'world=8 params=4,038,240 effective_batch=128' "$RUN_DIR/train.log"
 grep -q 'done. artifacts in' "$RUN_DIR/train.log"
 if grep -Eiq 'FloatingPointError|non-finite|out of memory|NCCL[^[:space:]]* (error|failed)' "$RUN_DIR/train.log"; then
   printf 'training log contains a fatal numerical/runtime signature\n' >&2
@@ -158,6 +183,8 @@ for step in 250 500 750 1000; do
     --history "$CALIBRATION_DIR/history.json" \
     --expected-step "$step" \
     --expected-world-size 8 \
+    --expected-delta 1 \
+    --require-vector-only \
     --history-mode contains \
     --output "$RUN_DIR/local_ckpt_${step}_gate.json"
 done
@@ -166,11 +193,13 @@ done
   --history "$CALIBRATION_DIR/history.json" \
   --expected-step 1000 \
   --expected-world-size 8 \
+  --expected-delta 1 \
+  --require-vector-only \
   --output "$RUN_DIR/local_last_gate.json"
 "$PYTHON" scripts/select_calibration_checkpoints.py \
   --history "$CALIBRATION_DIR/history.json" \
   --config "$CALIBRATION_DIR/config.json" \
-  --expected-delta "$DELTA" --count 2 \
+  --expected-delta "$DELTA" --require-vector-only --count 2 \
   --output "$RUN_DIR/local_checkpoint_selection.json"
 
 printf 'gate=resume_readback start=%s\n' "$(date -Is)"
@@ -200,6 +229,8 @@ for step in 250 500 750 1000; do
     --history "$READBACK_DIR/history.json" \
     --expected-step "$step" \
     --expected-world-size 8 \
+    --expected-delta 1 \
+    --require-vector-only \
     --history-mode contains \
     --output "$RUN_DIR/obs_ckpt_${step}_gate.json"
 done
@@ -208,17 +239,20 @@ done
   --history "$READBACK_DIR/history.json" \
   --expected-step 1000 \
   --expected-world-size 8 \
+  --expected-delta 1 \
+  --require-vector-only \
   --output "$RUN_DIR/obs_last_gate.json"
 "$PYTHON" scripts/select_calibration_checkpoints.py \
   --history "$READBACK_DIR/history.json" \
   --config "$READBACK_DIR/config.json" \
-  --expected-delta "$DELTA" --count 2 \
+  --expected-delta "$DELTA" --require-vector-only --count 2 \
   --output "$RUN_DIR/obs_checkpoint_selection.json"
 cmp "$RUN_DIR/local_checkpoint_selection.json" "$RUN_DIR/obs_checkpoint_selection.json"
 
 final_sha=$(sha256sum "$CALIBRATION_DIR/ckpt_1000.pt" | awk '{print $1}')
-printf '{"status":"PASS","scope":"bounded_calibration","run_id":"%s","commit":"%s","delta_frames":%s,"steps":1000,"checkpoint_sha256":"%s","obs":"%s","completed_at":"%s"}\n' \
-  "$RUN_ID" "$actual_commit" "$DELTA" "$final_sha" "$OBS_DST" "$(date -Is)" \
+printf '{"status":"PASS","scope":"bounded_calibration","run_id":"%s","commit":"%s","lr_profile":"%s","delta_frames":%s,"steps":1000,"checkpoint_sha256":"%s","obs":"%s","completed_at":"%s"}\n' \
+  "$RUN_ID" "$actual_commit" "$LR_PROFILE" "$DELTA" "$final_sha" "$OBS_DST" "$(date -Is)" \
   | tee "$RUN_DIR/summary.json"
 obsutil sync "$RUN_DIR" "$OBS_DST/audit"
-printf 'TensorCloud01 delta=%s bounded calibration PASS; formal training was not started.\n' "$DELTA"
+printf 'TensorCloud01 delta=%s lr_profile=%s bounded calibration PASS; formal training was not started.\n' \
+  "$DELTA" "$LR_PROFILE"

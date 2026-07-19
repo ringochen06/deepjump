@@ -164,6 +164,20 @@ def _worker(rank, world, ret):
     same7, total7, first_bad7 = _frac_synced(m7, world)
     tensor_cloud01_synced = same7 == total7
 
+    # (8) The vector-only attention candidate removes scalar q/k/v attention
+    # parameters while preserving the same DDP unused-parameter boundary.
+    tensor01_vector_cfg = ModelConfig(
+        hidden=16, vector_channels=16, num_heads=2, cond_layers=1,
+        transport_layers=1, tensor_cloud01=True,
+        tensor_cloud01_vector_only_attention=True,
+    )
+    torch.manual_seed(0)
+    m8 = DeepJumpLite(tensor01_vector_cfg, predict_heavy=True); m8.noise_sigma = 0.0
+    ddp8 = DDP(m8, find_unused_parameters=True)
+    _loss(ddp8(batch, tau=tau), batch).backward()
+    same8, total8, first_bad8 = _frac_synced(m8, world)
+    tensor_cloud01_vector_only_synced = same8 == total8
+
     if rank == 0:
         ret["synced"] = bool(synced)
         ret["synced_frac"] = f"{same}/{total}"
@@ -184,6 +198,11 @@ def _worker(rank, world, ret):
         ret["tensor_cloud01_synced"] = bool(tensor_cloud01_synced)
         ret["tensor_cloud01_synced_frac"] = f"{same7}/{total7}"
         ret["tensor_cloud01_first_unsynced"] = first_bad7
+        ret["tensor_cloud01_vector_only_synced"] = bool(
+            tensor_cloud01_vector_only_synced
+        )
+        ret["tensor_cloud01_vector_only_synced_frac"] = f"{same8}/{total8}"
+        ret["tensor_cloud01_vector_only_first_unsynced"] = first_bad8
     dist.destroy_process_group()
 
 
@@ -207,4 +226,5 @@ if __name__ == "__main__":
           and res.get("unroll_synced") and res.get("vector_qk_synced"))
     ok = ok and res.get("paper_ff_synced") and res.get("tensor_qkv_synced")
     ok = ok and res.get("tensor_cloud01_synced")
+    ok = ok and res.get("tensor_cloud01_vector_only_synced")
     sys.exit(0 if ok else 1)

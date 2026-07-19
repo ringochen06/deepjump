@@ -18,6 +18,7 @@ def select_checkpoints(
     config: Any,
     *,
     expected_delta: int,
+    require_vector_only: bool = False,
     count: int = 2,
 ) -> dict[str, Any]:
     """Rank only by frozen validation loss; RMSD remains a diagnostic.
@@ -39,6 +40,8 @@ def select_checkpoints(
         raise ValueError("config delta_frames does not match the requested calibration")
     if model.get("tensor_cloud01") is not True:
         raise ValueError("config is not the reviewed TensorCloud01 architecture")
+    if require_vector_only and model.get("tensor_cloud01_vector_only_attention") is not True:
+        raise ValueError("config is not the reviewed vector-only attention candidate")
     if train.get("max_steps") != 1000:
         raise ValueError("config is not the reviewed 1000-step calibration")
 
@@ -67,6 +70,9 @@ def select_checkpoints(
         "status": "PASS",
         "scope": "checkpoint_selection_only",
         "delta_frames": expected_delta,
+        "vector_only_attention": bool(
+            model.get("tensor_cloud01_vector_only_attention", False)
+        ),
         "selection_rule": "lowest_frozen_validation_loss_then_earlier_step",
         "scientific_metrics_used_for_selection": False,
         "candidate_count": count,
@@ -95,6 +101,7 @@ def main() -> None:
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--expected-delta", required=True, type=int)
     parser.add_argument("--count", type=int, default=2)
+    parser.add_argument("--require-vector-only", action="store_true")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
 
@@ -102,6 +109,7 @@ def main() -> None:
         _load(args.history),
         _load(args.config),
         expected_delta=args.expected_delta,
+        require_vector_only=args.require_vector_only,
         count=args.count,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -110,7 +110,12 @@ def lr_at(step: int, cfg) -> float:
     """
     lr, lr_final = cfg.train.lr, cfg.train.lr_final
     warmup = getattr(cfg.train, "warmup_steps", 0)
-    total = max(1, cfg.train.max_steps)
+    horizon = getattr(cfg.train, "lr_horizon_steps", 0)
+    if horizon < 0:
+        raise ValueError("lr_horizon_steps must be non-negative")
+    if horizon and horizon < warmup:
+        raise ValueError("lr_horizon_steps must be at least warmup_steps")
+    total = max(1, horizon or cfg.train.max_steps)
     if warmup > 0 and step < warmup:
         return lr * (step + 1) / warmup
     if lr_final <= 0:
