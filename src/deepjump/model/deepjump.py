@@ -144,6 +144,7 @@ class DeepJumpLite(nn.Module):
         tau_max: float = 1.0,
         terminal_denoise: bool = False,
         drift_anchor: str = "state",
+        project_v_atom_mask: bool = False,
     ):
         """Predict X_{t+delta} from X_t. Returns (P, V).
 
@@ -168,13 +169,26 @@ class DeepJumpLite(nn.Module):
         device = batch["P_t"].device
         P_t, V_t = batch["P_t"], batch["V_t"]
         mask = batch["residue_mask"]
-        ctx = self.encode(batch)
+        atom_mask = batch.get("atom_mask")
+        if project_v_atom_mask:
+            if atom_mask is None:
+                raise ValueError("project_v_atom_mask requires atom_mask")
+            V_t = V_t * atom_mask.unsqueeze(-1)
+            model_batch = {**batch, "V_t": V_t}
+        else:
+            model_batch = batch
+        ctx = self.encode(model_batch)
+
+        def project_v(value):
+            if project_v_atom_mask:
+                return value * atom_mask.unsqueeze(-1)
+            return value
 
         if mode == "mean":
             tau0 = torch.zeros(P_t.shape[0], device=device)
             P_hat_1, V_hat_1 = self.predict_x1(P_t, V_t, tau0, ctx, P_t, V_t, mask)
             V_out = V_hat_1 if (self.predict_heavy and V_hat_1 is not None) else V_t
-            return P_hat_1, V_out
+            return P_hat_1, project_v(V_out)
 
         noise = torch.randn(P_t.shape, generator=generator).to(device)
         noise = noise * mask.unsqueeze(-1)
@@ -184,9 +198,9 @@ class DeepJumpLite(nn.Module):
                 raise ValueError("source_noise_v requires atom_mask")
             v_noise = torch.randn(V_t.shape, generator=generator).to(device)
             v_noise = v_noise * batch["atom_mask"].unsqueeze(-1)
-            V = V_t + self._vector_source_noise_sigma() * v_noise
+            V = project_v(V_t + self._vector_source_noise_sigma() * v_noise)
         else:
-            V = V_t.clone()
+            V = project_v(V_t.clone())
         taus = torch.linspace(0, tau_max, steps + 1, device=device)
         for i in range(steps):
             tau = taus[i].expand(P_t.shape[0])
@@ -202,6 +216,7 @@ class DeepJumpLite(nn.Module):
 
             P_euler = P + dt * drift_P
             V_euler = V + dt * drift_V if drift_V is not None else V
+            V_euler = project_v(V_euler)
             if integrator == "heun":
                 tau_next = taus[i + 1].expand(P_t.shape[0])
                 P_hat_next, V_hat_next = self.predict_x1(
@@ -214,7 +229,7 @@ class DeepJumpLite(nn.Module):
                 if drift_V is not None and V_hat_next is not None:
                     next_anchor_V = V_euler if drift_anchor == "state" else V_t
                     drift_V_next = (V_hat_next - next_anchor_V) / denom_next
-                    V = V + 0.5 * dt * (drift_V + drift_V_next)
+                    V = project_v(V + 0.5 * dt * (drift_V + drift_V_next))
             else:
                 P, V = P_euler, V_euler
 
@@ -222,8 +237,8 @@ class DeepJumpLite(nn.Module):
             tau = torch.full((P_t.shape[0],), tau_max, device=device)
             P, V_hat = self.predict_x1(P, V, tau, ctx, P_t, V_t, mask)
             if self.predict_heavy and V_hat is not None:
-                V = V_hat
-        return P, V
+                V = project_v(V_hat)
+        return P, project_v(V)
 
 
 def count_parameters(model: nn.Module) -> int:

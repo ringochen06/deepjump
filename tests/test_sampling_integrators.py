@@ -23,6 +23,22 @@ class IdentityEndpointModel(DeepJumpLite):
         return P_tau, V_tau
 
 
+class InvalidVectorEndpointModel(DeepJumpLite):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.invalid_seen_by_encode = []
+        self.invalid_seen_by_predictor = []
+
+    def encode(self, batch):
+        invalid = ~batch["atom_mask"]
+        self.invalid_seen_by_encode.append(torch.count_nonzero(batch["V_t"][invalid]).item())
+        return None
+
+    def predict_x1(self, P_tau, V_tau, tau, ctx, P_t, V_t, residue_mask):
+        self.invalid_seen_by_predictor.append(torch.count_nonzero(V_tau[..., 5:, :]).item())
+        return torch.zeros_like(P_tau), torch.ones_like(V_tau)
+
+
 def _batch():
     return {
         "P_t": torch.zeros(2, 4, 3),
@@ -158,3 +174,67 @@ def test_source_noise_v_does_not_create_missing_atoms():
     )
     assert torch.count_nonzero(noisy_v[:, :, 5:]) == 0
     assert torch.count_nonzero(noisy_v[:, :, :5]) > 0
+
+
+@pytest.mark.parametrize(
+    ("integrator", "tau_max", "terminal_denoise"),
+    [("euler", 1.0, False), ("heun", 0.95, True)],
+)
+def test_project_v_atom_mask_keeps_every_sampler_state_masked(
+    integrator, tau_max, terminal_denoise
+):
+    batch = _batch()
+    batch["atom_mask"][:, :, 5:] = False
+    batch["V_t"][:, :, 5:] = 9.0
+    model = InvalidVectorEndpointModel(
+        ModelConfig(source_noise_v=True, source_noise_sigma_v=1.0),
+        noise_sigma=0.0,
+        predict_heavy=True,
+    ).eval()
+
+    _, V = model.sample(
+        batch,
+        steps=2,
+        integrator=integrator,
+        tau_max=tau_max,
+        terminal_denoise=terminal_denoise,
+        project_v_atom_mask=True,
+        generator=torch.Generator().manual_seed(23),
+    )
+
+    assert model.invalid_seen_by_encode == [0]
+    assert model.invalid_seen_by_predictor
+    assert set(model.invalid_seen_by_predictor) == {0}
+    assert torch.count_nonzero(V[:, :, 5:]) == 0
+
+
+def test_project_v_atom_mask_is_default_off_and_requires_a_mask():
+    batch = _batch()
+    batch["atom_mask"][:, :, 5:] = False
+    model = InvalidVectorEndpointModel(
+        ModelConfig(source_noise_v=False), noise_sigma=0.0, predict_heavy=True
+    ).eval()
+    _, legacy = model.sample(batch, steps=1)
+    assert torch.count_nonzero(legacy[:, :, 5:]) > 0
+
+    without_mask = {key: value for key, value in batch.items() if key != "atom_mask"}
+    with pytest.raises(ValueError, match="requires atom_mask"):
+        model.sample(without_mask, steps=1, project_v_atom_mask=True)
+
+
+def test_project_v_atom_mask_preserves_all_valid_result_bitwise():
+    batch = _batch()
+    model = IdentityEndpointModel(
+        ModelConfig(source_noise_v=True, source_noise_sigma_v=1.0),
+        noise_sigma=1.5,
+        predict_heavy=True,
+    ).eval()
+    legacy = model.sample(batch, steps=3, generator=torch.Generator().manual_seed(29))
+    projected = model.sample(
+        batch,
+        steps=3,
+        project_v_atom_mask=True,
+        generator=torch.Generator().manual_seed(29),
+    )
+    assert torch.equal(legacy[0], projected[0])
+    assert torch.equal(legacy[1], projected[1])
