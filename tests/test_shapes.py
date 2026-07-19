@@ -43,6 +43,27 @@ def test_sample_shape():
     assert V.shape == batch["V_t"].shape
 
 
+def test_zero_source_validation_endpoint_matches_mean_sampling_bitwise():
+    batch = _toy_batch(B=2, N=6, seed=11)
+    batch["atom_mask"] = torch.ones(2, 6, 13, dtype=torch.bool)
+    model = DeepJumpLite(
+        ModelConfig(
+            cond_layers=1,
+            transport_layers=1,
+            source_noise_v=True,
+            source_noise_sigma_v=0.0,
+        ),
+        noise_sigma=0.0,
+        predict_heavy=True,
+    ).eval()
+
+    endpoint = model(batch, tau=torch.zeros(2))
+    mean_P, mean_V = model.sample(batch, steps=1, mode="mean")
+
+    assert torch.equal(endpoint["P_hat_1"], mean_P)
+    assert torch.equal(endpoint["V_hat_1"], mean_V)
+
+
 def test_rollout_shape():
     from deepjump.sampling import rollout
 

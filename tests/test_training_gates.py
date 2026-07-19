@@ -505,3 +505,30 @@ def test_ode_step_scan_runner_is_paired_bounded_and_inference_only():
     assert "torchrun" not in runner.lower()
     assert 'sha256sum -c "$RUN_DIR/audit_sha256.txt"' in runner
     assert "training was not started" in runner
+
+
+def test_endpoint_grid_runner_is_full_grid_bounded_and_inference_only():
+    runner = Path("cloud/huawei/run_endpoint_grid_discriminator.sh").read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-45}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 45 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
+    assert 'sudo -n shutdown -h now || shutdown_code=$?' in runner
+    assert 'CHECKPOINT=${CHECKPOINT:?set the existing source-law ckpt_1000.pt path}' in runner
+    assert 'CHECKPOINT_SHA256=${CHECKPOINT_SHA256:?set the frozen checkpoint SHA256}' in runner
+    assert "_verify_checkpoint_source_law" in runner
+    assert "scripts/endpoint_grid_eval.py" in runner
+    assert '--checkpoint-sha256 "$CHECKPOINT_SHA256"' in runner
+    assert '--starts 5 --output "$RUN_DIR/grid.json"' in runner
+    assert '"$PYTHON" -m scripts.adjudicate_endpoint_grid' in runner
+    assert '"twenty_domain_authorized":false' in runner
+    assert '"second_seed_authorized":false' in runner
+    assert '"confirmation_authorized":false' in runner
+    assert '"formal_training_authorized":false' in runner
+    assert "scripts/train_ddp.py" not in runner
+    assert "torchrun" not in runner.lower()
+    assert 'sha256sum -c "$RUN_DIR/audit_sha256.txt"' in runner
+    assert "training was not started" in runner
