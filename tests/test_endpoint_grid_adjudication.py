@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from scripts.adjudicate_endpoint_grid import adjudicate
+from scripts.adjudicate_heldout_endpoint_grid import adjudicate as adjudicate_heldout
 from scripts.adjudicate_source_law_candidate import _sha256
 
 
@@ -33,7 +34,18 @@ def _checkpoint(path: Path) -> str:
     return _sha256(path)
 
 
-def _result(path: Path, checkpoint: Path, *, passing: bool, nonphysical: bool = False):
+def _result(
+    path: Path,
+    checkpoint: Path,
+    *,
+    passing: bool,
+    nonphysical: bool = False,
+    domain: str = "1a0hA01",
+    residues_total: int = 89,
+    residues_evaluated: int | None = None,
+):
+    if residues_evaluated is None:
+        residues_evaluated = residues_total
     cells = []
     for index, (temperature, replica) in enumerate(
         (temperature, replica)
@@ -47,7 +59,7 @@ def _result(path: Path, checkpoint: Path, *, passing: bool, nonphysical: bool = 
         noop = [2.0 + 0.01 * start for start in range(5)]
         model = [value + delta for value in noop]
         cells.append({
-            "domain": "1a0hA01",
+            "domain": domain,
             "temperature": temperature,
             "replica": replica,
             "frames": 102,
@@ -65,12 +77,12 @@ def _result(path: Path, checkpoint: Path, *, passing: bool, nonphysical: bool = 
         "checkpoint_step": 1000,
         "delta_frames": 1,
         "settings": {"starts": 5, "method": "mean", "source_noise": False},
-        "domain_panel": {"sha256": DOMAIN_SHA, "ids": ["1a0hA01"]},
+        "domain_panel": {"sha256": DOMAIN_SHA, "ids": [domain]},
         "grid": {"temperatures": TEMPERATURES, "replicas": REPLICAS},
         "preprocessing": {
             "canon_symmetric": True,
-            "residues_total": 89,
-            "residues_evaluated": 89,
+            "residues_total": residues_total,
+            "residues_evaluated": residues_evaluated,
         },
         "cells": cells,
     }
@@ -178,3 +190,89 @@ def test_endpoint_grid_rejects_corrupted_paired_difference(tmp_path):
 
     with pytest.raises(ValueError, match="recorded paired RMSD"):
         adjudicate(result, checkpoint, digest, DOMAIN_SHA)
+
+
+def test_heldout_endpoint_grid_accepts_full_non89_domain(tmp_path):
+    checkpoint = tmp_path / "ckpt_1000.pt"
+    digest = _checkpoint(checkpoint)
+    result = tmp_path / "result.json"
+    _result(
+        result,
+        checkpoint,
+        passing=True,
+        domain="1gxlA02",
+        residues_total=86,
+    )
+
+    report = adjudicate_heldout(result, checkpoint, digest, DOMAIN_SHA)
+
+    assert report["status"] == "PASS_HELDOUT_ENDPOINT_GRID"
+    assert report["cells"] == 25
+    assert report["starts"] == 125
+    assert report["twenty_domain_authorized"] is False
+    assert report["formal_training_authorized"] is False
+
+
+def test_heldout_endpoint_grid_rejects_training_domain_or_crop(tmp_path):
+    checkpoint = tmp_path / "ckpt_1000.pt"
+    digest = _checkpoint(checkpoint)
+    result = tmp_path / "result.json"
+    _result(result, checkpoint, passing=True)
+    with pytest.raises(ValueError, match="domain identity mismatch"):
+        adjudicate_heldout(result, checkpoint, digest, DOMAIN_SHA)
+
+    _result(
+        result,
+        checkpoint,
+        passing=True,
+        domain="1gxlA02",
+        residues_total=86,
+        residues_evaluated=85,
+    )
+    with pytest.raises(ValueError, match="requires all 86 residues"):
+        adjudicate_heldout(result, checkpoint, digest, DOMAIN_SHA)
+
+    _result(
+        result,
+        checkpoint,
+        passing=True,
+        domain="1gxlA02",
+        residues_total=87,
+    )
+    with pytest.raises(ValueError, match="requires all 86 residues"):
+        adjudicate_heldout(result, checkpoint, digest, DOMAIN_SHA)
+
+
+@pytest.mark.parametrize(
+    ("passing", "nonphysical", "expected_status"),
+    [
+        (False, False, "STOP_NULL_HELDOUT_ENDPOINT_GRID"),
+        (True, True, "STOP_NONPHYSICAL_HELDOUT_ENDPOINT_GRID"),
+    ],
+)
+def test_heldout_endpoint_grid_stop_statuses(
+    tmp_path, passing, nonphysical, expected_status
+):
+    checkpoint = tmp_path / "ckpt_1000.pt"
+    digest = _checkpoint(checkpoint)
+    result = tmp_path / "result.json"
+    _result(
+        result,
+        checkpoint,
+        passing=passing,
+        nonphysical=nonphysical,
+        domain="1gxlA02",
+        residues_total=86,
+    )
+
+    report = adjudicate_heldout(result, checkpoint, digest, DOMAIN_SHA)
+
+    assert report["status"] == expected_status
+
+
+def test_heldout_endpoint_panel_is_first_frozen_dev_domain():
+    heldout = Path("configs/heldout_endpoint_domain_seed0.txt").read_text().splitlines()
+    dev = Path("configs/dev_20_length_proportional_seed0.txt").read_text().splitlines()
+
+    assert heldout == [dev[0]]
+    assert heldout != ["1a0hA01"]

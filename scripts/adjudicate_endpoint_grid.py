@@ -38,11 +38,18 @@ def _finite_vector(value: object, *, label: str) -> list[float]:
     return result
 
 
-def adjudicate(
+def _adjudicate_grid(
     result_path: str | Path,
     checkpoint_path: str | Path,
     checkpoint_sha256: str,
     domain_list_sha256: str,
+    *,
+    expected_domain_id: str,
+    expected_residue_count: int | None,
+    pass_status: str,
+    null_status: str,
+    nonphysical_status: str,
+    scope: str,
 ) -> dict:
     if _sha256(checkpoint_path) != checkpoint_sha256:
         raise ValueError("checkpoint SHA256 mismatch")
@@ -66,8 +73,8 @@ def adjudicate(
     if panel.get("sha256") != domain_list_sha256:
         raise ValueError("domain panel SHA256 mismatch")
     domain_ids = panel.get("ids")
-    if not isinstance(domain_ids, list) or len(domain_ids) != 1:
-        raise ValueError("endpoint grid requires exactly one frozen domain")
+    if domain_ids != [expected_domain_id]:
+        raise ValueError("endpoint grid domain identity mismatch")
     if result.get("grid") != {
         "temperatures": list(MDCATH_TEMPERATURES),
         "replicas": list(MDCATH_REPLICAS),
@@ -76,11 +83,18 @@ def adjudicate(
     preprocessing = result.get("preprocessing", {})
     if preprocessing.get("canon_symmetric") is not True:
         raise ValueError("endpoint grid requires canonical symmetric atom slots")
-    if (
-        int(preprocessing.get("residues_total", -1)) != 89
-        or int(preprocessing.get("residues_evaluated", -1)) != 89
+    residues_total = int(preprocessing.get("residues_total", -1))
+    residues_evaluated = int(preprocessing.get("residues_evaluated", -1))
+    if expected_residue_count is None:
+        if residues_total <= 0 or residues_evaluated != residues_total:
+            raise ValueError("endpoint grid requires all residues")
+    elif (
+        residues_total != expected_residue_count
+        or residues_evaluated != expected_residue_count
     ):
-        raise ValueError("endpoint grid requires all 89 residues")
+        raise ValueError(
+            f"endpoint grid requires all {expected_residue_count} residues"
+        )
 
     cells = result.get("cells")
     if not isinstance(cells, list) or len(cells) != len(EXPECTED_CELLS):
@@ -151,15 +165,15 @@ def adjudicate(
     )
     physical = physical_cells == len(EXPECTED_CELLS)
     if not physical:
-        status = "STOP_NONPHYSICAL_ENDPOINT_GRID"
+        status = nonphysical_status
     elif robust_advantage:
-        status = "PASS_CLEAN_ENDPOINT_GRID"
+        status = pass_status
     else:
-        status = "STOP_NULL_ENDPOINT_GRID"
+        status = null_status
 
     return {
         "status": status,
-        "scope": "single-domain 5x5-cell clean-source H1 endpoint discriminator only",
+        "scope": scope,
         "checkpoint_sha256": checkpoint_sha256,
         "domain_list_sha256": domain_list_sha256,
         "result_sha256": _sha256(result_path),
@@ -176,20 +190,40 @@ def adjudicate(
         "physical_cells": physical_cells,
         "robust_endpoint_advantage": robust_advantage,
         "decision_rule": {
-            "PASS_CLEAN_ENDPOINT_GRID": (
+            pass_status: (
                 "all 25 cells are physical and cell-balanced mean(model-noop)<0 "
                 "with |mean|>=2SE"
             ),
-            "STOP_NULL_ENDPOINT_GRID": (
+            null_status: (
                 "the physical clean endpoint does not beat no-op by the preregistered 2SE rule"
             ),
-            "STOP_NONPHYSICAL_ENDPOINT_GRID": "at least one cell violates the frozen bond gate",
+            nonphysical_status: "at least one cell violates the frozen bond gate",
         },
         "twenty_domain_authorized": False,
         "second_seed_authorized": False,
         "confirmation_authorized": False,
         "formal_training_authorized": False,
     }
+
+
+def adjudicate(
+    result_path: str | Path,
+    checkpoint_path: str | Path,
+    checkpoint_sha256: str,
+    domain_list_sha256: str,
+) -> dict:
+    return _adjudicate_grid(
+        result_path,
+        checkpoint_path,
+        checkpoint_sha256,
+        domain_list_sha256,
+        expected_domain_id="1a0hA01",
+        expected_residue_count=89,
+        pass_status="PASS_CLEAN_ENDPOINT_GRID",
+        null_status="STOP_NULL_ENDPOINT_GRID",
+        nonphysical_status="STOP_NONPHYSICAL_ENDPOINT_GRID",
+        scope="single-domain 5x5-cell clean-source H1 endpoint discriminator only",
+    )
 
 
 def main() -> None:
