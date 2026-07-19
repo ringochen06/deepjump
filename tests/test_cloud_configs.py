@@ -158,6 +158,9 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     tensorcloud01_vector_only_fp32 = load_config(
         "configs/v100_tensorcloud01_vector_only_d1_fp32_calibration.yaml"
     )
+    tensorcloud01_vector_only_fp32_continuation = load_config(
+        "configs/v100_tensorcloud01_vector_only_d1_fp32_continuation2000.yaml"
+    )
     vector_fp32_highlr = load_config(
         "configs/v100_tensorcloud01_vector_only_fp32_highlr_step230.yaml"
     )
@@ -287,6 +290,24 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
     assert tensorcloud01_vector_only_fp32.train.lr == 5e-3
     assert tensorcloud01_vector_only_fp32.train.lr_final == 3e-3
     assert tensorcloud01_vector_only_fp32.train.lr_horizon_steps == 1000
+    assert asdict(tensorcloud01_vector_only_fp32_continuation.data) == asdict(
+        tensorcloud01_vector_only_fp32.data
+    )
+    assert asdict(tensorcloud01_vector_only_fp32_continuation.model) == asdict(
+        tensorcloud01_vector_only_fp32.model
+    )
+    continuation_train = asdict(tensorcloud01_vector_only_fp32_continuation.train)
+    fp32_reference_train = asdict(tensorcloud01_vector_only_fp32.train)
+    for key in ("max_steps", "val_every", "ckpt_every", "keep_last_k", "out_dir"):
+        continuation_train.pop(key)
+        fp32_reference_train.pop(key)
+    assert continuation_train == fp32_reference_train
+    assert tensorcloud01_vector_only_fp32_continuation.train.max_steps == 2000
+    assert tensorcloud01_vector_only_fp32_continuation.train.val_every == 100
+    assert tensorcloud01_vector_only_fp32_continuation.train.ckpt_every == 100
+    assert tensorcloud01_vector_only_fp32_continuation.train.keep_last_k == 10
+    assert tensorcloud01_vector_only_fp32_continuation.train.lr_horizon_steps == 1000
+    assert not tensorcloud01_vector_only_fp32_continuation.train.amp
     for probe in (vector_fp32_highlr, vector_fp16_lowlr):
         assert asdict(probe.data) == asdict(tensorcloud01_vector_only.data)
         assert asdict(probe.model) == asdict(tensorcloud01_vector_only.model)
@@ -328,3 +349,41 @@ def test_followup_robustness_configs_preserve_effective_batch_and_bounds():
         assert calibration.train.out_dir.endswith(f"d{expected_delta}_calibration")
     assert unroll5.train.batch_size * 8 * unroll5.train.grad_accum == 128
     assert unroll5.train.max_steps == 500
+
+
+def test_full_tensor_fp32_discriminator_matches_vector_only_budget():
+    vector_calibration = load_config(
+        "configs/v100_tensorcloud01_vector_only_d1_fp32_calibration.yaml"
+    )
+    vector_continuation = load_config(
+        "configs/v100_tensorcloud01_vector_only_d1_fp32_continuation2000.yaml"
+    )
+    full_calibration = load_config(
+        "configs/v100_tensorcloud01_full_d1_fp32_calibration.yaml"
+    )
+    full_continuation = load_config(
+        "configs/v100_tensorcloud01_full_d1_fp32_continuation2000.yaml"
+    )
+
+    for vector, full in (
+        (vector_calibration, full_calibration),
+        (vector_continuation, full_continuation),
+    ):
+        assert asdict(vector.data) == asdict(full.data)
+        vector_model = asdict(vector.model)
+        full_model = asdict(full.model)
+        assert vector_model.pop("tensor_cloud01_vector_only_attention") is True
+        assert full_model.pop("tensor_cloud01_vector_only_attention") is False
+        assert vector_model == full_model
+        vector_train = asdict(vector.train)
+        full_train = asdict(full.train)
+        vector_train.pop("out_dir")
+        full_train.pop("out_dir")
+        assert vector_train == full_train
+
+    assert not full_calibration.train.amp
+    assert not full_continuation.train.amp
+    assert full_calibration.train.max_steps == 1000
+    assert full_continuation.train.max_steps == 2000
+    assert full_calibration.train.lr_horizon_steps == 1000
+    assert full_continuation.train.lr_horizon_steps == 1000

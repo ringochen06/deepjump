@@ -165,6 +165,56 @@ def test_checkpoint_gate_rejects_wrong_attention_variant(tmp_path):
     assert "vector-only" in result.stderr
 
 
+def test_checkpoint_gate_accepts_full_tensor_and_rejects_vector_only(tmp_path):
+    checkpoint, history = _write_checkpoint(tmp_path, vector_only=False)
+    accepted = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_training_checkpoint.py",
+            "--checkpoint",
+            str(checkpoint),
+            "--history",
+            str(history),
+            "--expected-step",
+            "10",
+            "--expected-world-size",
+            "8",
+            "--expected-delta",
+            "1",
+            "--require-full-tensor",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert json.loads(accepted.stdout)["status"] == "PASS"
+
+    vector_dir = tmp_path / "vector"
+    vector_dir.mkdir()
+    vector_checkpoint, vector_history = _write_checkpoint(vector_dir, vector_only=True)
+    rejected = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_training_checkpoint.py",
+            "--checkpoint",
+            str(vector_checkpoint),
+            "--history",
+            str(vector_history),
+            "--expected-step",
+            "10",
+            "--expected-world-size",
+            "8",
+            "--expected-delta",
+            "1",
+            "--require-full-tensor",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode != 0
+    assert "full-tensor" in rejected.stderr
+
+
 def test_checkpoint_gate_can_select_one_intermediate_history_record(tmp_path):
     checkpoint, history = _write_checkpoint(tmp_path, step=250)
     history.write_text(
@@ -276,3 +326,88 @@ def test_tensorcloud01_eval_integration_runner_is_bounded_and_pins_source():
     assert "sha256sum -c SHA256SUMS" in runner
     assert '"scope":"integration_only"' in runner
     assert "scientific calibration/training was not started" in runner
+
+
+def test_vector_only_sampling_discriminator_is_bounded_and_inference_only():
+    runner = Path("cloud/huawei/run_vector_only_sampling_discriminator.sh").read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-10}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 10 ]]' in runner
+    assert runner.index('trap shutdown_on_exit EXIT') < runner.index(
+        '[[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]]'
+    )
+    assert 'sudo -n shutdown -c 2>/dev/null || true' in runner
+    assert 'sudo -n shutdown -h now || shutdown_code=$?' in runner
+    assert "conflicting training/evaluation process exists" in runner
+    assert "--domains 1 --starts 1 --steps 20" in runner
+    assert "--methods mean,ode_1,ode_5,ode_20" in runner
+    assert 'for anchor in state conditioner' in runner
+    assert '--drift-anchor "$anchor"' in runner
+    assert '"scope": "inference_mechanism_probe_only"' in runner
+    assert "sha256sum -c SHA256SUMS" in runner
+    assert '"$PYTHON" scripts/train_ddp.py' not in runner
+    assert "--warm-start" not in runner
+    assert "no training or scientific gate was run" in runner
+
+
+def test_vector_only_paper_loss_continuation_is_bounded_and_fail_closed():
+    runner = Path(
+        "cloud/huawei/run_vector_only_paper_loss_continuation2000.sh"
+    ).read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-90}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 90 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'CHECKPOINT=${CHECKPOINT:?'
+    )
+    assert 'sudo -n shutdown -h "+$HARD_STOP_MINUTES"' in runner
+    assert 'sudo -n shutdown -h now' in runner
+    assert 'EXPECTED_CHECKPOINT_SHA256=${EXPECTED_CHECKPOINT_SHA256:?' in runner
+    assert "v100_tensorcloud01_vector_only_d1_fp32_continuation2000.yaml" in runner
+    assert 'scripts/train_ddp.py --config "$CONFIG" --resume "$CHECKPOINT"' in runner
+    assert "--warm-start" not in runner
+    assert "--expected-step 1000" in runner
+    assert "for step in $(seq 1100 100 2000)" in runner
+    assert "--domains 3 --starts 2 --steps 20 --methods mean,ode_1" in runner
+    assert "--drift-anchor state" in runner
+    assert "scripts/adjudicate_paper_loss_continuation.py" in runner
+    assert '"formal_training_authorized":false' in runner
+    assert "sha256sum -c" in runner
+    assert "formal training was not started" in runner
+
+
+def test_full_tensor_paper_loss_discriminator_is_matched_bounded_and_fail_closed():
+    runner = Path(
+        "cloud/huawei/run_full_tensor_paper_loss_discriminator2000.sh"
+    ).read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-135}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 135 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert 'sudo -n shutdown -h "+$HARD_STOP_MINUTES"' in runner
+    assert 'sudo -n shutdown -h now' in runner
+    assert "v100_tensorcloud01_full_d1_fp32_calibration.yaml" in runner
+    assert "v100_tensorcloud01_full_d1_fp32_continuation2000.yaml" in runner
+    assert 'scripts/train_ddp.py --config "$CALIBRATION_CONFIG"' in runner
+    assert (
+        'scripts/train_ddp.py --config "$CONTINUATION_CONFIG" --resume '
+        '"$SOURCE_CHECKPOINT"'
+    ) in runner
+    assert "--warm-start" not in runner
+    assert "params=4,840,032" in runner
+    assert runner.count("--require-full-tensor") >= 3
+    assert "for step in $(seq 1100 100 2000)" in runner
+    assert "--domains 3 --starts 2 --steps 20 --methods mean,ode_1" in runner
+    assert "--drift-anchor state" in runner
+    assert '"$PYTHON" -m scripts.adjudicate_full_tensor_discriminator' in runner
+    assert '"$PYTHON" scripts/adjudicate_full_tensor_discriminator.py' not in runner
+    assert "VECTOR_BASELINE_OBS_PREFIX" in runner
+    assert "VECTOR_BASELINE_SHA256" in runner
+    assert "35b73f0d3f0889201fb192735114a7e818e30df41259edf6f4a6f8f8479755ff" in runner
+    assert '--vector-baseline "$VECTOR_BASELINE_PATH"' in runner
+    assert "expected exactly one frozen vector-only baseline" in runner
+    assert '"formal_training_authorized":false' in runner
+    assert "sha256sum -c" in runner
+    assert "formal training was not started" in runner
