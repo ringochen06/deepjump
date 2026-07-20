@@ -5,7 +5,7 @@ set -euo pipefail
 REPO=${REPO:-/data/deepjump}
 PYTHON=${PYTHON:-/data/venvs/deepjump/bin/python}
 DATA_ROOT=${DATA_ROOT:-/data/mdcath}
-export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$REPO:$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 SHUTDOWN_ON_EXIT=${SHUTDOWN_ON_EXIT:-}
 HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-75}
 HARD_STOP_UNIT="deepjump-dev20-endpoint-hard-stop-$(date -u +%Y%m%dT%H%M%SZ)-$$"

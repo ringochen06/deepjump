@@ -285,6 +285,7 @@ def test_tensorcloud01_calibration_runner_is_bounded_and_delta_scoped():
 def test_dev20_endpoint_runner_is_evaluation_only_bounded_and_readback_closed():
     runner = Path("cloud/huawei/run_twenty_domain_endpoint_gate.sh").read_text()
 
+    assert 'export PYTHONPATH="$REPO:$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
     assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-75}' in runner
     assert '[[ "$HARD_STOP_MINUTES" == 75 ]]' in runner
     assert runner.index("systemd-run") < runner.index("nvidia-smi")
