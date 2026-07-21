@@ -57,7 +57,7 @@ def build_bond_provenance(
     source: torch.Tensor,
     target: torch.Tensor,
     bond_mask: torch.Tensor,
-    res_index: torch.Tensor,
+    residue_type_ids: torch.Tensor,
     starts: list[int],
 ) -> tuple[dict, list[dict]]:
     """Record every topology-valid bond and the coordinates of each per-start maximum."""
@@ -69,8 +69,8 @@ def build_bond_provenance(
         raise ValueError("start count does not match the prediction batch")
     if bond_mask.shape != (prediction.shape[0], prediction.shape[1] - 1):
         raise ValueError("bond mask shape mismatch")
-    if res_index.shape != (prediction.shape[1],):
-        raise ValueError("res_index shape mismatch")
+    if residue_type_ids.shape != (prediction.shape[1],):
+        raise ValueError("residue type shape mismatch")
 
     mask = bond_mask[0].bool()
     if not torch.equal(bond_mask.bool(), mask.unsqueeze(0).expand_as(bond_mask)):
@@ -78,20 +78,25 @@ def build_bond_provenance(
     indices = torch.nonzero(mask, as_tuple=False).flatten()
     if indices.numel() == 0:
         raise ValueError("outlier cell has no topology-valid bonds")
-    res_values = [int(value) for value in res_index.detach().cpu().tolist()]
+    residue_type_values = [
+        int(value) for value in residue_type_ids.detach().cpu().tolist()
+    ]
     mask_values = [bool(value) for value in mask.detach().cpu().tolist()]
     valid_bonds = []
     for index_value in indices.detach().cpu().tolist():
         index = int(index_value)
         valid_bonds.append({
             "bond_index": index,
-            "res_index_pair": [res_values[index], res_values[index + 1]],
-            "consecutive_res_index": res_values[index + 1] == res_values[index] + 1,
+            "residue_position_pair": [index, index + 1],
+            "residue_type_pair": [
+                residue_type_values[index], residue_type_values[index + 1]
+            ],
+            "bond_mask_value": True,
         })
     topology = {
         "residues": prediction.shape[1],
-        "res_index": res_values,
-        "res_index_sha256": _json_sha256(res_values),
+        "residue_type_ids": residue_type_values,
+        "residue_type_ids_sha256": _json_sha256(residue_type_values),
         "bond_mask": mask_values,
         "bond_mask_sha256": _json_sha256(mask_values),
         "valid_bond_count": len(valid_bonds),
@@ -140,7 +145,11 @@ def build_bond_provenance(
             "valid_bond_lengths": all_valid,
             "max_predicted_bond": {
                 "bond_index": max_index,
-                "res_index_pair": [res_values[max_index], res_values[max_index + 1]],
+                "residue_position_pair": [max_index, max_index + 1],
+                "residue_type_pair": [
+                    residue_type_values[max_index],
+                    residue_type_values[max_index + 1],
+                ],
                 "source_positions": _positions(source[start_index, max_index : max_index + 2]),
                 "target_positions": _positions(target[start_index, max_index : max_index + 2]),
                 "predicted_positions": _positions(

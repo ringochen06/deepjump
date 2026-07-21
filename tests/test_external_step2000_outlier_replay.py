@@ -71,7 +71,8 @@ def _cell() -> dict:
 def _max_record() -> dict:
     return {
         "bond_index": 2,
-        "res_index_pair": [15, 16],
+        "residue_position_pair": [2, 3],
+        "residue_type_pair": [14, 13],
         "source_positions": [[0.0, 0.0, 0.0], [3.8, 0.0, 0.0]],
         "target_positions": [[0.0, 0.0, 0.0], [3.9, 0.0, 0.0]],
         "predicted_positions": [[0.0, 0.0, 0.0], [6.0, 0.0, 0.0]],
@@ -87,14 +88,24 @@ def _payload(checkpoint: Path, digest: str, reference: Path, reference_sha: str)
     cell = _cell()
     topology = {
         "residues": 4,
-        "res_index": [10, 11, 15, 16],
-        "res_index_sha256": adjudicator._json_sha256([10, 11, 15, 16]),
+        "residue_type_ids": [7, 2, 14, 13],
+        "residue_type_ids_sha256": adjudicator._json_sha256([7, 2, 14, 13]),
         "bond_mask": [True, False, True],
         "bond_mask_sha256": adjudicator._json_sha256([True, False, True]),
         "valid_bond_count": 2,
         "valid_bonds": [
-            {"bond_index": 0, "res_index_pair": [10, 11], "consecutive_res_index": True},
-            {"bond_index": 2, "res_index_pair": [15, 16], "consecutive_res_index": True},
+            {
+                "bond_index": 0,
+                "residue_position_pair": [0, 1],
+                "residue_type_pair": [7, 2],
+                "bond_mask_value": True,
+            },
+            {
+                "bond_index": 2,
+                "residue_position_pair": [2, 3],
+                "residue_type_pair": [14, 13],
+                "bond_mask_value": True,
+            },
         ],
     }
     per_start = []
@@ -178,19 +189,25 @@ def _adjudicate(case):
     )
 
 
-def test_bond_provenance_records_only_masked_consecutive_bonds():
+def test_bond_provenance_uses_mask_not_residue_type_order():
     source = torch.tensor([[[0.0, 0, 0], [3.8, 0, 0], [8.0, 0, 0], [11.8, 0, 0]]])
     target = source.clone()
     prediction = source.clone()
     prediction[0, 3, 0] = 14.0
     mask = torch.tensor([[True, False, True]])
-    res_index = torch.tensor([10, 11, 15, 16])
+    residue_type_ids = torch.tensor([7, 2, 14, 13])
 
     topology, records = build_bond_provenance(
-        prediction, source, target, mask, res_index, [7]
+        prediction, source, target, mask, residue_type_ids, [7]
     )
 
     assert [item["bond_index"] for item in topology["valid_bonds"]] == [0, 2]
+    assert [item["residue_position_pair"] for item in topology["valid_bonds"]] == [
+        [0, 1], [2, 3]
+    ]
+    assert [item["residue_type_pair"] for item in topology["valid_bonds"]] == [
+        [7, 2], [14, 13]
+    ]
     assert records[0]["start_frame"] == 7
     assert records[0]["max_predicted_bond"]["bond_index"] == 2
     assert records[0]["max_predicted_bond"]["predicted_length_fp64"] == pytest.approx(6.0)
@@ -207,9 +224,35 @@ def test_step2000_replay_confirms_real_model_output_outlier(tmp_path, monkeypatc
 def test_step2000_replay_fails_closed_on_topology_corruption(tmp_path, monkeypatch):
     case = _case(tmp_path, monkeypatch)
     payload = json.loads(case[0].read_text())
-    payload["replay"]["topology"]["valid_bonds"][1]["res_index_pair"] = [15, 99]
+    payload["replay"]["topology"]["valid_bonds"][1]["residue_position_pair"] = [1, 2]
     case[0].write_text(json.dumps(payload))
-    with pytest.raises(ValueError, match="res_index pair"):
+    with pytest.raises(ValueError, match="residue position pair"):
+        _adjudicate(case)
+
+
+def test_step2000_replay_rejects_residue_type_corruption(tmp_path, monkeypatch):
+    case = _case(tmp_path, monkeypatch)
+    payload = json.loads(case[0].read_text())
+    payload["replay"]["topology"]["valid_bonds"][1]["residue_type_pair"] = [14, 12]
+    case[0].write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="residue type pair"):
+        _adjudicate(case)
+
+
+@pytest.mark.parametrize("invalid_type", [-1, 21])
+def test_step2000_replay_rejects_out_of_range_residue_types(
+    tmp_path, monkeypatch, invalid_type
+):
+    case = _case(tmp_path, monkeypatch)
+    payload = json.loads(case[0].read_text())
+    type_ids = payload["replay"]["topology"]["residue_type_ids"]
+    type_ids[0] = invalid_type
+    payload["replay"]["topology"]["residue_type_ids_sha256"] = adjudicator._json_sha256(
+        type_ids
+    )
+    payload["replay"]["topology"]["valid_bonds"][0]["residue_type_pair"][0] = invalid_type
+    case[0].write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="valid integers"):
         _adjudicate(case)
 
 

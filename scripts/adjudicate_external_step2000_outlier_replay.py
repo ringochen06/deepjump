@@ -9,6 +9,7 @@ import math
 import statistics
 from pathlib import Path
 
+from deepjump.atom_constants import NUM_RESIDUE_TYPES
 from scripts.adjudicate_source_law_candidate import MAX_BOND_MAX
 from scripts.external_endpoint_identity import _sha256, load_disjoint_panels, verify_multidomain_checkpoint
 from scripts.external_step2000_outlier_replay import (
@@ -56,18 +57,27 @@ def _distance(points: object, label: str) -> float:
 
 def _validate_topology(topology: dict) -> tuple[list[int], list[bool], set[int]]:
     residues = int(topology.get("residues", -1))
-    res_index = topology.get("res_index")
+    residue_type_ids = topology.get("residue_type_ids")
     bond_mask = topology.get("bond_mask")
-    if residues < 2 or not isinstance(res_index, list) or len(res_index) != residues:
-        raise ValueError("res_index topology shape mismatch")
-    if not all(isinstance(value, int) and not isinstance(value, bool) for value in res_index):
-        raise ValueError("res_index must contain integers")
+    if (
+        residues < 2
+        or not isinstance(residue_type_ids, list)
+        or len(residue_type_ids) != residues
+    ):
+        raise ValueError("residue type topology shape mismatch")
+    if not all(
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value < NUM_RESIDUE_TYPES
+        for value in residue_type_ids
+    ):
+        raise ValueError("residue type ids must be valid integers")
     if not isinstance(bond_mask, list) or len(bond_mask) != residues - 1:
         raise ValueError("bond mask topology shape mismatch")
     if not all(isinstance(value, bool) for value in bond_mask):
         raise ValueError("bond mask must contain booleans")
-    if topology.get("res_index_sha256") != _json_sha256(res_index):
-        raise ValueError("res_index provenance SHA256 mismatch")
+    if topology.get("residue_type_ids_sha256") != _json_sha256(residue_type_ids):
+        raise ValueError("residue type provenance SHA256 mismatch")
     if topology.get("bond_mask_sha256") != _json_sha256(bond_mask):
         raise ValueError("bond mask provenance SHA256 mismatch")
     expected_indices = {index for index, valid in enumerate(bond_mask) if valid}
@@ -79,22 +89,24 @@ def _validate_topology(topology: dict) -> tuple[list[int], list[bool], set[int]]
         index = int(record.get("bond_index", -1))
         if index < 0 or index >= residues - 1 or index in recorded_indices:
             raise ValueError("invalid or duplicate topology bond index")
-        pair = [res_index[index], res_index[index + 1]]
-        if record.get("res_index_pair") != pair:
-            raise ValueError("topology res_index pair mismatch")
-        consecutive = pair[1] == pair[0] + 1
-        if record.get("consecutive_res_index") is not consecutive or not consecutive:
-            raise ValueError("valid bond crosses a non-consecutive residue index")
+        if record.get("residue_position_pair") != [index, index + 1]:
+            raise ValueError("topology residue position pair mismatch")
+        if record.get("residue_type_pair") != [
+            residue_type_ids[index], residue_type_ids[index + 1]
+        ]:
+            raise ValueError("topology residue type pair mismatch")
+        if record.get("bond_mask_value") is not True or not bond_mask[index]:
+            raise ValueError("topology record is not a mask-true bond")
         recorded_indices.add(index)
     if recorded_indices != expected_indices or not expected_indices:
         raise ValueError("valid bond indices do not reproduce bond_mask")
-    return res_index, bond_mask, expected_indices
+    return residue_type_ids, bond_mask, expected_indices
 
 
 def _validate_per_start(
     records: object,
     starts: list[int],
-    res_index: list[int],
+    residue_type_ids: list[int],
     valid_indices: set[int],
 ) -> tuple[list[float], list[float], list[float]]:
     if not isinstance(records, list) or len(records) != len(starts):
@@ -130,8 +142,12 @@ def _validate_per_start(
         max_index = int(maximum.get("bond_index", -1))
         if max_index not in valid_indices:
             raise ValueError("maximum predicted bond is masked out")
-        if maximum.get("res_index_pair") != [res_index[max_index], res_index[max_index + 1]]:
-            raise ValueError("maximum predicted bond res_index pair mismatch")
+        if maximum.get("residue_position_pair") != [max_index, max_index + 1]:
+            raise ValueError("maximum predicted bond residue position pair mismatch")
+        if maximum.get("residue_type_pair") != [
+            residue_type_ids[max_index], residue_type_ids[max_index + 1]
+        ]:
+            raise ValueError("maximum predicted bond residue type pair mismatch")
         if max_index != max(by_index, key=lambda index: by_index[index]["predicted_length"]):
             raise ValueError("recorded maximum is not the longest valid predicted bond")
         for prefix in ("source", "target", "predicted"):
@@ -248,9 +264,9 @@ def adjudicate(
     _close(replay.get("bond_mean"), frozen["bond_mean"], "panel bond mean")
     _close(replay.get("bond_max"), frozen["bond_max"], "panel bond max")
 
-    res_index, _, valid_indices = _validate_topology(replay.get("topology", {}))
+    residue_type_ids, _, valid_indices = _validate_topology(replay.get("topology", {}))
     predicted, source, target = _validate_per_start(
-        replay.get("per_start"), frozen["starts"], res_index, valid_indices
+        replay.get("per_start"), frozen["starts"], residue_type_ids, valid_indices
     )
     _close(statistics.fmean(predicted), replay["bond_mean"], "provenance bond mean")
     _close(max(predicted), replay["bond_max"], "provenance bond max")
@@ -293,7 +309,7 @@ def adjudicate(
         "formal_training_authorized": False,
         "decision_rule": {
             "identity": "checkpoint, panel, cell, starts, RMSD, and aggregate bond metrics reproduce frozen evidence within 1e-5",
-            "topology": "every counted bond is mask-true and joins consecutive res_index values",
+            "topology": "every counted bond is mask-true, adjacent in residue position, and carries valid residue-type ids",
             "model_outlier": "repeat and batched-vs-single differences <=1e-5; source/target bond maxima <=5.5A; predicted bond max >5.5A",
         },
     }
