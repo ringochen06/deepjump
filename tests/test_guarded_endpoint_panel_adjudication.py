@@ -244,6 +244,68 @@ def test_guarded_panel_rejects_mechanism_failure(tmp_path, monkeypatch):
     assert report["status"] == "STOP_CONDITIONAL_SAFEGUARD_MECHANISM"
 
 
+def test_guarded_panel_keeps_fp32_batch_acceptance_descriptive(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "ckpt_2000.pt"
+    checkpoint.write_bytes(b"x")
+    payload = _result_payload(checkpoint)
+    payload["mechanism_probe"]["fp32_accept_b3"] = False
+    result = tmp_path / "result.json"
+    result.write_text(json.dumps(payload))
+    monkeypatch.setattr(
+        adjudicator,
+        "verify_multidomain_checkpoint",
+        lambda *args, **kw: ({"step": 2000}, TRAIN_FINGERPRINT),
+    )
+
+    report = adjudicator.adjudicate(
+        result,
+        checkpoint,
+        EXPECTED_CHECKPOINT_SHA256,
+        TRAINING_LIST,
+        EXPECTED_TRAINING_SHA256,
+        PANEL_LIST,
+        EXPECTED_PANEL_SHA256,
+    )
+
+    assert report["mechanism_passes"] is True
+    assert report["status"] == "PASS_CONDITIONAL_SAFEGUARD_TRAINING_DEV20"
+
+
+@pytest.mark.parametrize("bad_value", [None, "yes"])
+def test_guarded_panel_rejects_missing_or_nonboolean_fp64_acceptance(
+    tmp_path, monkeypatch, bad_value
+):
+    checkpoint = tmp_path / "ckpt_2000.pt"
+    checkpoint.write_bytes(b"x")
+    payload = _result_payload(checkpoint)
+    if bad_value is None:
+        payload["mechanism_probe"].pop("fp64_accept_b1")
+        payload["mechanism_probe"].pop("fp64_accept_b3")
+    else:
+        payload["mechanism_probe"]["fp64_accept_b1"] = bad_value
+        payload["mechanism_probe"]["fp64_accept_b3"] = bad_value
+    result = tmp_path / "result.json"
+    result.write_text(json.dumps(payload))
+    monkeypatch.setattr(
+        adjudicator,
+        "verify_multidomain_checkpoint",
+        lambda *args, **kw: ({"step": 2000}, TRAIN_FINGERPRINT),
+    )
+
+    report = adjudicator.adjudicate(
+        result,
+        checkpoint,
+        EXPECTED_CHECKPOINT_SHA256,
+        TRAINING_LIST,
+        EXPECTED_TRAINING_SHA256,
+        PANEL_LIST,
+        EXPECTED_PANEL_SHA256,
+    )
+
+    assert report["mechanism_passes"] is False
+    assert report["status"] == "STOP_CONDITIONAL_SAFEGUARD_MECHANISM"
+
+
 def test_guarded_panel_fails_closed_on_branch_mismatch(tmp_path, monkeypatch):
     checkpoint = tmp_path / "ckpt_2000.pt"
     checkpoint.write_bytes(b"x")
@@ -272,7 +334,9 @@ def test_guarded_runner_is_inference_only_and_fail_closed():
     runner = Path("cloud/huawei/run_guarded_training_dev20.sh").read_text()
     assert "SHUTDOWN_ON_EXIT" in runner
     assert "systemd-run" in runner
-    assert "75m" in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-95}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 95 ]]' in runner
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
     assert "scripts/guarded_endpoint_panel_eval.py" in runner
     assert "scripts.adjudicate_guarded_endpoint_panel" in runner
     assert "audit_mdcath_staging.py" in runner

@@ -7,7 +7,7 @@ PYTHON=${PYTHON:-/data/venvs/deepjump/bin/python}
 DATA_ROOT=${DATA_ROOT:-/data/mdcath}
 export PYTHONPATH="$REPO:$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
 SHUTDOWN_ON_EXIT=${SHUTDOWN_ON_EXIT:-}
-HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-75}
+HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-95}
 HARD_STOP_UNIT="deepjump-guarded-training-dev20-hard-stop-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
 shutdown_on_exit() {
@@ -30,9 +30,9 @@ shutdown_on_exit() {
 trap shutdown_on_exit EXIT
 
 [[ "$SHUTDOWN_ON_EXIT" == 1 ]] || { printf 'SHUTDOWN_ON_EXIT must be 1\n' >&2; exit 2; }
-[[ "$HARD_STOP_MINUTES" == 75 ]] || { printf 'HARD_STOP_MINUTES must be 75\n' >&2; exit 2; }
+[[ "$HARD_STOP_MINUTES" == 95 ]] || { printf 'HARD_STOP_MINUTES must be 95\n' >&2; exit 2; }
 sudo -n systemd-run --quiet --unit="$HARD_STOP_UNIT" \
-  --on-active=75m /usr/bin/systemctl poweroff
+  --on-active="${HARD_STOP_MINUTES}m" /usr/bin/systemctl poweroff
 sudo -n systemctl is-active --quiet "$HARD_STOP_UNIT.timer"
 sudo -n shutdown -c 2>/dev/null || true
 

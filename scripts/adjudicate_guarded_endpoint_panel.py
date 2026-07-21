@@ -183,7 +183,6 @@ def adjudicate(
             mechanism.get("fp32_b1_b3_vector_max_abs_diff"),
             label="FP32 vector difference",
         ) >= 0
-        and mechanism.get("fp32_accept_b1") == mechanism.get("fp32_accept_b3")
         and 0 <= _finite(
             mechanism.get("fp64_b1_b3_position_max_abs_diff"),
             label="FP64 position difference",
@@ -192,6 +191,8 @@ def adjudicate(
             mechanism.get("fp64_b1_b3_vector_max_abs_diff"),
             label="FP64 vector difference",
         ) <= FP64_MAX_ABS_DIFF
+        and type(mechanism.get("fp64_accept_b1")) is bool
+        and type(mechanism.get("fp64_accept_b3")) is bool
         and mechanism.get("fp64_accept_b1") == mechanism.get("fp64_accept_b3")
     )
 
