@@ -1,4 +1,13 @@
-from scripts.select_subset import LENGTH_BANDS, length_band_quotas, pick_length_proportional
+import hashlib
+
+import pytest
+
+from scripts.select_subset import (
+    LENGTH_BANDS,
+    length_band_quotas,
+    load_exclusions,
+    pick_length_proportional,
+)
 
 
 def _fake_residues(per_band=300):
@@ -23,3 +32,21 @@ def test_length_proportional_exclusion_is_deterministic_and_disjoint():
     assert first == second
     assert len(first) == len(set(first)) == 100
     assert not (set(first) & excluded)
+
+
+def test_repeated_exclusion_lists_record_identity_and_union(tmp_path):
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("a\nb\n")
+    second.write_text("b\nc\n")
+    excluded, identities = load_exclusions([str(first), str(second)])
+    assert excluded == {"a", "b", "c"}
+    assert [item["count"] for item in identities] == [2, 2]
+    assert identities[0]["sha256"] == hashlib.sha256(first.read_bytes()).hexdigest()
+
+
+def test_exclusion_list_rejects_duplicates(tmp_path):
+    path = tmp_path / "duplicate.txt"
+    path.write_text("a\na\n")
+    with pytest.raises(ValueError, match="duplicate"):
+        load_exclusions([str(path)])

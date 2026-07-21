@@ -32,6 +32,8 @@ from scripts.endpoint_panel_eval import (
     _runtime_probe_status,
 )
 from scripts.external_endpoint_identity import (
+    load_fresh_external_panels,
+    verify_guarded_training_prerequisite,
     verify_multidomain_checkpoint,
     verify_training_fingerprint,
 )
@@ -39,6 +41,7 @@ from scripts.external_endpoint_root_cause import _batch, _cell_tensors
 
 
 SCOPE = "conditional_reject_to_source_training_dev20_v1"
+EXTERNAL_SCOPE = "conditional_reject_to_source_fresh_external_dev20_v1"
 EXPECTED_CHECKPOINT_SHA256 = (
     "f3b5965303794e14059f2b67b6b81a538fadb1303c44e1d7c640af44ea690222"
 )
@@ -49,6 +52,19 @@ EXPECTED_TRAINING_SHA256 = (
 EXPECTED_PANEL_SHA256 = (
     "4fd7015951fc48598d7beb888670d701b39697cdf62c2982a95b2b7b243474af"
 )
+EXPECTED_EXTERNAL_PANEL_SHA256 = (
+    "9bae11fa0e6336e7451c372efa25ca55af77aa9cb27f91e1fd241612531a920f"
+)
+EXPECTED_PRIOR_EXTERNAL_SHA256 = (
+    "9fb229049aec41ac9b376b447938930e434c94b7e106dfe5dc1ae1ac8cdaf245"
+)
+EXPECTED_UNTOUCHED_SHA256 = (
+    "e56ed7de735db542f4e20fb73f2654a6c1bcf67f3082849f63f0ab74f4208c38"
+)
+EXPECTED_TRAINING_DECISION_SHA256 = (
+    "b234f31db96c2f461ea0abd056aa6e724d2d94aa52930bbc990c43cfc302000b"
+)
+EXPECTED_EXTERNAL_BYTES = 13_354_825_648
 BOND_MEAN_LO = 3.2
 BOND_MEAN_HI = 4.5
 BOND_MAX = 5.5
@@ -328,6 +344,14 @@ def main() -> None:
     parser.add_argument("--training-domain-list-sha256", required=True)
     parser.add_argument("--domain-list", required=True)
     parser.add_argument("--domain-list-sha256", required=True)
+    parser.add_argument("--panel-kind", choices=("training", "fresh-external"), default="training")
+    parser.add_argument("--panel-data-root")
+    parser.add_argument("--prior-external-domain-list")
+    parser.add_argument("--prior-external-domain-list-sha256")
+    parser.add_argument("--untouched-domain-list")
+    parser.add_argument("--untouched-domain-list-sha256")
+    parser.add_argument("--prerequisite-decision")
+    parser.add_argument("--prerequisite-decision-sha256")
     parser.add_argument("--runtime-probe-output", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -336,22 +360,61 @@ def main() -> None:
         parser.error("checkpoint is not the frozen full-tensor step2000 artifact")
     if args.training_domain_list_sha256 != EXPECTED_TRAINING_SHA256:
         parser.error("training subset identity mismatch")
-    if args.domain_list_sha256 != EXPECTED_PANEL_SHA256:
-        parser.error("training development panel identity mismatch")
+    expected_panel_sha = (
+        EXPECTED_PANEL_SHA256 if args.panel_kind == "training" else EXPECTED_EXTERNAL_PANEL_SHA256
+    )
+    if args.domain_list_sha256 != expected_panel_sha:
+        parser.error(f"{args.panel_kind} panel identity mismatch")
     checkpoint, train_fingerprint = verify_multidomain_checkpoint(
         args.ckpt, args.checkpoint_sha256, expected_step=EXPECTED_CHECKPOINT_STEP
     )
     training_ids, training_sha = load_frozen_domain_ids(
         args.training_domain_list, args.training_domain_list_sha256
     )
-    panel_ids, panel_sha = load_frozen_domain_ids(
-        args.domain_list, args.domain_list_sha256
-    )
+    prerequisite = None
+    panel_contract = None
+    if args.panel_kind == "fresh-external":
+        required = {
+            "prior external list": args.prior_external_domain_list,
+            "prior external SHA256": args.prior_external_domain_list_sha256,
+            "untouched list": args.untouched_domain_list,
+            "untouched SHA256": args.untouched_domain_list_sha256,
+            "prerequisite decision": args.prerequisite_decision,
+            "prerequisite decision SHA256": args.prerequisite_decision_sha256,
+            "panel data root": args.panel_data_root,
+        }
+        missing = [label for label, value in required.items() if not value]
+        if missing:
+            parser.error(f"fresh external panel is missing: {', '.join(missing)}")
+        if args.prior_external_domain_list_sha256 != EXPECTED_PRIOR_EXTERNAL_SHA256:
+            parser.error("prior external panel identity mismatch")
+        if args.untouched_domain_list_sha256 != EXPECTED_UNTOUCHED_SHA256:
+            parser.error("untouched panel identity mismatch")
+        if args.prerequisite_decision_sha256 != EXPECTED_TRAINING_DECISION_SHA256:
+            parser.error("training prerequisite decision identity mismatch")
+        panel_contract = load_fresh_external_panels(
+            args.training_domain_list, args.training_domain_list_sha256,
+            args.prior_external_domain_list, args.prior_external_domain_list_sha256,
+            args.untouched_domain_list, args.untouched_domain_list_sha256,
+            args.domain_list, args.domain_list_sha256,
+        )
+        panel_ids = panel_contract["fresh_external"]["ids"]
+        panel_sha = panel_contract["fresh_external"]["sha256"]
+        prerequisite = verify_guarded_training_prerequisite(
+            args.prerequisite_decision,
+            args.prerequisite_decision_sha256,
+            expected_checkpoint_sha256=EXPECTED_CHECKPOINT_SHA256,
+            expected_training_sha256=EXPECTED_TRAINING_SHA256,
+        )
+    else:
+        panel_ids, panel_sha = load_frozen_domain_ids(
+            args.domain_list, args.domain_list_sha256
+        )
     if len(training_ids) != 1000 or len(set(training_ids)) != 1000:
         raise ValueError("training subset must contain 1000 unique domains")
     if len(panel_ids) != EXPECTED_DOMAINS or len(set(panel_ids)) != EXPECTED_DOMAINS:
         raise ValueError("training development panel must contain 20 unique domains")
-    if not set(panel_ids).issubset(training_ids):
+    if args.panel_kind == "training" and not set(panel_ids).issubset(training_ids):
         raise ValueError("training development panel must be a subset of training1000")
     training_identity = verify_training_fingerprint(
         checkpoint,
@@ -366,8 +429,11 @@ def main() -> None:
     temperatures, replicas = require_mdcath_full_grid(
         data_cfg["temperatures"], data_cfg["replicas"]
     )
-    root = Path(args.training_data_root).expanduser().resolve()
+    root = Path(args.panel_data_root or args.training_data_root).expanduser().resolve()
     paths = resolve_frozen_domains(discover_domains(root), panel_ids)
+    panel_total_bytes = sum(path.stat().st_size for path in paths)
+    if args.panel_kind == "fresh-external" and panel_total_bytes != EXPECTED_EXTERNAL_BYTES:
+        raise ValueError("fresh external panel byte count mismatch")
     device = resolve_device(checkpoint["cfg"]["train"]["device"])
     if device.type != "cuda":
         raise ValueError("conditional safeguard panel requires CUDA")
@@ -486,7 +552,7 @@ def main() -> None:
             handle.close()
 
     result = {
-        "scope": SCOPE,
+        "scope": SCOPE if args.panel_kind == "training" else EXTERNAL_SCOPE,
         "checkpoint": str(Path(args.ckpt).resolve()),
         "checkpoint_sha256": args.checkpoint_sha256,
         "checkpoint_step": int(checkpoint["step"]),
@@ -520,10 +586,15 @@ def main() -> None:
             "path": str(Path(args.domain_list).resolve()),
             "sha256": panel_sha,
             "ids": panel_ids,
-            "subset_of_training1000": True,
+            "subset_of_training1000": args.panel_kind == "training",
+            "fresh_external": args.panel_kind == "fresh-external",
+            "exclusion_union_count": (
+                panel_contract["exclusion_union_count"] if panel_contract else None
+            ),
             "h5_files": len(paths),
-            "total_bytes": sum(path.stat().st_size for path in paths),
+            "total_bytes": panel_total_bytes,
         },
+        "prerequisite": prerequisite,
         "grid": {"temperatures": temperatures, "replicas": replicas},
         "mechanism_probe": mechanism,
         "runtime_probe": runtime_probe,

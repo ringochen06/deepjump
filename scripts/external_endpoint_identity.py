@@ -21,6 +21,8 @@ EXPECTED_CHECKPOINT_STEP = 1000
 EXPECTED_CHECKPOINT_SCHEMA = 2
 EXPECTED_TRAINING_DOMAINS = 1000
 EXPECTED_EXTERNAL_DOMAINS = 20
+EXPECTED_UNTOUCHED_DOMAINS = 100
+EXPECTED_EXCLUSION_UNION_DOMAINS = 1120
 
 
 def _sha256(path: str | Path) -> str:
@@ -120,6 +122,73 @@ def load_disjoint_panels(
     if overlap:
         raise ValueError(f"external panel overlaps the training subset: {overlap}")
     return training_ids, training_sha256, external_ids, external_sha256
+
+
+def load_fresh_external_panels(
+    training_domain_list: str | Path,
+    training_domain_list_sha256: str,
+    prior_external_domain_list: str | Path,
+    prior_external_domain_list_sha256: str,
+    untouched_domain_list: str | Path,
+    untouched_domain_list_sha256: str,
+    fresh_external_domain_list: str | Path,
+    fresh_external_domain_list_sha256: str,
+) -> dict[str, object]:
+    """Load the four frozen panels and prove fresh external data was never reused."""
+    specs = (
+        ("training", training_domain_list, training_domain_list_sha256, EXPECTED_TRAINING_DOMAINS),
+        ("prior_external", prior_external_domain_list, prior_external_domain_list_sha256, EXPECTED_EXTERNAL_DOMAINS),
+        ("untouched", untouched_domain_list, untouched_domain_list_sha256, EXPECTED_UNTOUCHED_DOMAINS),
+        ("fresh_external", fresh_external_domain_list, fresh_external_domain_list_sha256, EXPECTED_EXTERNAL_DOMAINS),
+    )
+    loaded: dict[str, dict[str, object]] = {}
+    for label, path, expected_sha256, expected_count in specs:
+        ids, actual_sha256 = load_frozen_domain_ids(path, expected_sha256)
+        if len(ids) != expected_count or len(set(ids)) != expected_count:
+            raise ValueError(f"{label} panel must contain exactly {expected_count} unique domains")
+        loaded[label] = {"ids": ids, "sha256": actual_sha256}
+    excluded = (
+        set(loaded["training"]["ids"])
+        | set(loaded["prior_external"]["ids"])
+        | set(loaded["untouched"]["ids"])
+    )
+    if len(excluded) != EXPECTED_EXCLUSION_UNION_DOMAINS:
+        raise ValueError("frozen exclusion panels are not mutually disjoint")
+    overlap = sorted(excluded & set(loaded["fresh_external"]["ids"]))
+    if overlap:
+        raise ValueError(f"fresh external panel overlaps the frozen exclusion union: {overlap}")
+    return {**loaded, "exclusion_union_count": len(excluded)}
+
+
+def verify_guarded_training_prerequisite(
+    decision_path: str | Path,
+    expected_sha256: str,
+    *,
+    expected_checkpoint_sha256: str,
+    expected_training_sha256: str,
+) -> dict:
+    """Bind an external gate to the exact successful guarded training decision."""
+    expected_sha256 = _require_digest(expected_sha256, label="prerequisite decision SHA256")
+    actual_sha256 = _sha256(decision_path)
+    if not hmac.compare_digest(actual_sha256, expected_sha256):
+        raise ValueError("prerequisite decision SHA256 mismatch")
+    decision = json.loads(Path(decision_path).read_text())
+    if decision.get("status") != "PASS_CONDITIONAL_SAFEGUARD_TRAINING_DEV20":
+        raise ValueError("guarded training prerequisite did not pass")
+    if decision.get("checkpoint_sha256") != expected_checkpoint_sha256:
+        raise ValueError("prerequisite checkpoint SHA256 mismatch")
+    if decision.get("training_domain_list_sha256") != expected_training_sha256:
+        raise ValueError("prerequisite training subset SHA256 mismatch")
+    expected_flags = {
+        "external_development_authorized": True,
+        "second_seed_authorized": False,
+        "untouched_confirmation_authorized": False,
+        "formal_training_authorized": False,
+    }
+    for key, expected in expected_flags.items():
+        if type(decision.get(key)) is not bool or decision.get(key) is not expected:
+            raise ValueError(f"prerequisite authorization flag mismatch: {key}")
+    return {"sha256": actual_sha256, "status": decision["status"]}
 
 
 def verify_training_fingerprint(
