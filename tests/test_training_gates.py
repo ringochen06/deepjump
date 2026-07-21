@@ -306,6 +306,34 @@ def test_dev20_endpoint_runner_is_evaluation_only_bounded_and_readback_closed():
     assert "sudo -n shutdown -h now" in runner
 
 
+def test_external_dev20_runner_is_disjoint_evaluation_only_and_fail_closed():
+    runner = Path("cloud/huawei/run_external_dev20_endpoint_gate.sh").read_text()
+
+    assert 'export PYTHONPATH="$REPO:$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-120}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 120 ]]' in runner
+    assert runner.index("systemd-run") < runner.index("nvidia-smi")
+    assert "scripts/external_endpoint_panel_eval.py" in runner
+    assert "scripts.adjudicate_external_endpoint_panel" in runner
+    assert "configs/subset_1000_length_proportional.txt" in runner
+    assert "configs/external_dev_20_length_proportional_seed20260721.txt" in runner
+    assert "39278d6dc3de52065b19dffb2438eae53fca3730572bba30496c1b116d597734" in runner
+    assert "9fb229049aec41ac9b376b447938930e434c94b7e106dfe5dc1ae1ac8cdaf245" in runner
+    assert "13778143616" in runner
+    assert "--expected-h5 1000" in runner
+    assert "scripts/download_mdcath.py" in runner
+    assert "scripts/audit_external_mdcath.py" in runner
+    assert "download.log" in runner
+    assert "tests/test_external_endpoint_panel_adjudication.py" in runner
+    assert "train_ddp.py" not in runner
+    assert "scripts/train.py" not in runner
+    assert 'formal_training_authorized": False' in runner
+    assert 'second_seed_authorized": bool(decision["second_seed_authorized"])' in runner
+    assert "sha256sum -c \"$RUN_DIR/audit_sha256.txt\"" in runner
+    assert "readback_completion.sha256" in runner
+    assert "sudo -n shutdown -h now" in runner
+
+
 def test_vector_only_numerics_discriminator_is_bounded_and_two_arm_scoped():
     runner = Path("cloud/huawei/run_vector_only_step221_discriminator.sh").read_text()
     assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
