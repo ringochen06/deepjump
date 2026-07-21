@@ -102,6 +102,26 @@ def dataset_fingerprint(files) -> str:
     return digest.hexdigest()
 
 
+def build_frozen_validation_loader(val_ds, cfg):
+    """Build the reusable validation panel without multiprocessing IPC state."""
+    val_subset = Subset(
+        val_ds,
+        val_ds.stratified_indices(seed=cfg.data.seed + 2),
+    )
+    # Rank 0 retains every validation batch for all checkpoints. Worker-backed
+    # tensors keep shared-memory file descriptors alive for the lifetime of that
+    # list and fail on full-domain panels (``received 0 items of ancdata``).
+    # This one-time sequential load is deterministic and does not affect the
+    # steady-state training loader.
+    return DataLoader(
+        val_subset,
+        batch_size=cfg.train.batch_size,
+        shuffle=False,
+        num_workers=0,
+        collate_fn=collate_pairs,
+    )
+
+
 @torch.no_grad()
 def evaluate(model, loader, device, cfg, amp_dtype, max_batches=None):
     model.eval()
@@ -177,9 +197,7 @@ def main():
                               drop_last=True, collate_fn=collate_pairs, persistent_workers=cfg.train.num_workers > 0)
     # One deterministic frame from every validation trajectory prevents the
     # former first-30-batches evaluation from collapsing onto one trajectory.
-    val_subset = Subset(val_ds, val_ds.stratified_indices(seed=cfg.data.seed + 2))
-    val_loader = DataLoader(val_subset, batch_size=cfg.train.batch_size, shuffle=False,
-                            num_workers=max(1, cfg.train.num_workers // 2), collate_fn=collate_pairs)
+    val_loader = build_frozen_validation_loader(val_ds, cfg)
     # Freeze validation crops once on rank 0. Re-iterating a multi-worker dataset
     # advances each worker's crop RNG, so checkpoints would otherwise see subtly
     # different panels (observable as a changing no-op RMSD).
