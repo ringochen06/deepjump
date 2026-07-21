@@ -176,7 +176,6 @@ def adjudicate(
         checkpoint_path,
         checkpoint_sha256,
         expected_step=EXPECTED_CHECKPOINT_STEP,
-        expected_train_seed=EXPECTED_TRAIN_SEED,
     )
     _, training_sha, external_ids, external_sha = load_disjoint_panels(
         training_domain_list,

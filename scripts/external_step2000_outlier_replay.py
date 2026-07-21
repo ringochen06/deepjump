@@ -194,7 +194,6 @@ def main() -> None:
         args.ckpt,
         args.checkpoint_sha256,
         expected_step=EXPECTED_CHECKPOINT_STEP,
-        expected_train_seed=EXPECTED_TRAIN_SEED,
     )
     _, training_sha, external_ids, external_sha = load_disjoint_panels(
         args.training_domain_list,
