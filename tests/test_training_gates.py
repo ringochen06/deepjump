@@ -334,6 +334,22 @@ def test_external_dev20_runner_is_disjoint_evaluation_only_and_fail_closed():
     assert "sudo -n shutdown -h now" in runner
 
 
+def test_external_endpoint_root_cause_runner_is_bounded_and_training_free():
+    runner = Path("cloud/huawei/run_external_endpoint_root_cause.sh").read_text()
+    assert "HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-75}" in runner
+    assert "SHUTDOWN_ON_EXIT must be 1" in runner
+    assert runner.index("systemd-run") < runner.index("nvidia-smi")
+    assert "scripts/external_endpoint_root_cause.py" in runner
+    assert "scripts.adjudicate_external_endpoint_root_cause" in runner
+    assert "configs/external_context_9_root_cause.txt" in runner
+    assert "7ec4af135d80c94764099c201ed1e3283f8bf17579fba34aa208e477bb484573" in runner
+    assert "REFERENCE_PANEL_SHA256=6b904ca244242987e28dcc3598a8ad877501f45e9ca4acba26a3e6dedc683b25" in runner
+    assert "OBS_READBACK_PASS" in runner
+    assert "scripts/train_ddp.py" not in runner
+    assert '"formal_training_authorized": False' in runner
+    assert "sudo -n shutdown -h now" in runner
+
+
 def test_vector_only_numerics_discriminator_is_bounded_and_two_arm_scoped():
     runner = Path("cloud/huawei/run_vector_only_step221_discriminator.sh").read_text()
     assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
