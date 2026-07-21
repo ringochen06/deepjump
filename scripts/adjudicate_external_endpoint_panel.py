@@ -47,9 +47,13 @@ def adjudicate(
     training_domain_list_sha256: str,
     external_domain_list: str | Path,
     external_domain_list_sha256: str,
+    *,
+    expected_checkpoint_step: int = EXPECTED_CHECKPOINT_STEP,
 ) -> dict:
     _, train_fingerprint = verify_multidomain_checkpoint(
-        checkpoint_path, checkpoint_sha256
+        checkpoint_path,
+        checkpoint_sha256,
+        expected_step=expected_checkpoint_step,
     )
     training_ids, training_sha256, domain_ids, domain_sha256 = load_disjoint_panels(
         training_domain_list,
@@ -63,8 +67,10 @@ def adjudicate(
         raise ValueError("external endpoint result scope mismatch")
     if result.get("checkpoint_sha256") != checkpoint_sha256:
         raise ValueError("result checkpoint SHA256 mismatch")
-    if int(result.get("checkpoint_step", -1)) != EXPECTED_CHECKPOINT_STEP:
-        raise ValueError("external endpoint gate requires checkpoint step 1000")
+    if int(result.get("checkpoint_step", -1)) != expected_checkpoint_step:
+        raise ValueError(
+            f"external endpoint gate requires checkpoint step {expected_checkpoint_step}"
+        )
     if int(result.get("checkpoint_schema", -1)) != EXPECTED_CHECKPOINT_SCHEMA:
         raise ValueError("external endpoint checkpoint schema mismatch")
     if result.get("checkpoint_train_fingerprint") != train_fingerprint:
@@ -259,6 +265,7 @@ def adjudicate(
         "status": status,
         "scope": "external 20-domain 5x5-cell clean-source H1 gate for multi-domain FP32 pilot",
         "checkpoint_sha256": checkpoint_sha256,
+        "checkpoint_step": expected_checkpoint_step,
         "checkpoint_train_fingerprint": train_fingerprint,
         "training_domain_list_sha256": training_sha256,
         "external_domain_list_sha256": domain_sha256,
@@ -293,6 +300,9 @@ def main() -> None:
     parser.add_argument("--result", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--checkpoint-sha256", required=True)
+    parser.add_argument(
+        "--expected-checkpoint-step", type=int, default=EXPECTED_CHECKPOINT_STEP
+    )
     parser.add_argument("--training-domain-list", required=True)
     parser.add_argument("--training-domain-list-sha256", required=True)
     parser.add_argument("--domain-list", required=True)
@@ -307,6 +317,7 @@ def main() -> None:
         args.training_domain_list_sha256,
         args.domain_list,
         args.domain_list_sha256,
+        expected_checkpoint_step=args.expected_checkpoint_step,
     )
     Path(args.output).write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))

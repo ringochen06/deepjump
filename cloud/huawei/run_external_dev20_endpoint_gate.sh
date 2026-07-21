@@ -43,6 +43,7 @@ EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?set deployed commit SHA}
 EXPECTED_HOSTNAME=${EXPECTED_HOSTNAME:?set authorized GPU hostname}
 CHECKPOINT=${CHECKPOINT:?set the frozen multidomain ckpt_1000.pt path}
 CHECKPOINT_SHA256=${CHECKPOINT_SHA256:?set the frozen checkpoint SHA256}
+EXPECTED_CHECKPOINT_STEP=${EXPECTED_CHECKPOINT_STEP:-1000}
 BUCKET=${BUCKET:?set BUCKET=obs://your-bucket-name}
 RUN_ID=${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
 TRAINING_DOMAIN_LIST=configs/subset_1000_length_proportional.txt
@@ -55,6 +56,10 @@ READBACK_DIR="/tmp/external_dev20_endpoint_gate_readback_$RUN_ID"
 OBS_DST="$BUCKET/deepjump-diagnostics/external-dev20-endpoint-gate/$RUN_ID"
 
 [[ "$(hostname)" == "$EXPECTED_HOSTNAME" ]] || { printf 'hostname mismatch\n' >&2; exit 2; }
+[[ "$EXPECTED_CHECKPOINT_STEP" =~ ^[1-9][0-9]*$ ]] || {
+  printf 'EXPECTED_CHECKPOINT_STEP must be a positive integer\n' >&2
+  exit 2
+}
 cd "$REPO"
 for path in "$RUN_DIR" "$READBACK_DIR"; do
   [[ ! -e "$path" ]] || { printf 'refusing to overwrite %s\n' "$path" >&2; exit 2; }
@@ -87,8 +92,8 @@ required_bytes=$((EXTERNAL_EXPECTED_BYTES + 10 * 1024 * 1024 * 1024))
 nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
 "$PYTHON" -c 'import torch; assert torch.cuda.is_available(); assert torch.cuda.device_count() == 8'
 "$PYTHON" -c \
-  'import sys; from scripts.external_endpoint_identity import verify_multidomain_checkpoint; verify_multidomain_checkpoint(sys.argv[1],sys.argv[2])' \
-  "$CHECKPOINT" "$CHECKPOINT_SHA256"
+  'import sys; from scripts.external_endpoint_identity import verify_multidomain_checkpoint; verify_multidomain_checkpoint(sys.argv[1],sys.argv[2],expected_step=int(sys.argv[3]))' \
+  "$CHECKPOINT" "$CHECKPOINT_SHA256" "$EXPECTED_CHECKPOINT_STEP"
 
 "$PYTHON" -m pytest -q \
   tests/test_shapes.py \
@@ -122,6 +127,7 @@ timeout --signal=TERM --kill-after=30s 45m \
 CUDA_VISIBLE_DEVICES=0 timeout --signal=TERM --kill-after=30s 55m \
   "$PYTHON" scripts/external_endpoint_panel_eval.py \
   --ckpt "$CHECKPOINT" --checkpoint-sha256 "$CHECKPOINT_SHA256" \
+  --expected-checkpoint-step "$EXPECTED_CHECKPOINT_STEP" \
   --training-data-root "$TRAINING_DATA_ROOT" \
   --training-domain-list "$TRAINING_DOMAIN_LIST" \
   --training-domain-list-sha256 "$TRAINING_DOMAIN_LIST_SHA256" \
@@ -134,6 +140,7 @@ CUDA_VISIBLE_DEVICES=0 timeout --signal=TERM --kill-after=30s 55m \
 "$PYTHON" -m scripts.adjudicate_external_endpoint_panel \
   --result "$RUN_DIR/panel.json" \
   --checkpoint "$CHECKPOINT" --checkpoint-sha256 "$CHECKPOINT_SHA256" \
+  --expected-checkpoint-step "$EXPECTED_CHECKPOINT_STEP" \
   --training-domain-list "$TRAINING_DOMAIN_LIST" \
   --training-domain-list-sha256 "$TRAINING_DOMAIN_LIST_SHA256" \
   --domain-list "$EXTERNAL_DOMAIN_LIST" \

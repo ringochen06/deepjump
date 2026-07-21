@@ -35,9 +35,9 @@ def test_external_audit_reads_replica_from_tuple_second_field():
         _available_replica_frames(available, 348)
 
 
-def _checkpoint(path: Path) -> str:
+def _checkpoint(path: Path, *, step: int = 1000) -> str:
     torch.save({
-        "step": 1000,
+        "step": step,
         "checkpoint_schema": 2,
         "cfg": {
             "data": {
@@ -68,6 +68,7 @@ def _write_result(
     domain_deltas: list[float],
     *,
     nonphysical: bool = False,
+    checkpoint_step: int = 1000,
 ) -> None:
     training_ids = TRAINING_LIST.read_text().splitlines()
     external_ids = EXTERNAL_LIST.read_text().splitlines()
@@ -116,7 +117,7 @@ def _write_result(
         "scope": "external_multidomain_fp32_pilot_h1",
         "checkpoint": str(checkpoint),
         "checkpoint_sha256": _sha256(checkpoint),
-        "checkpoint_step": 1000,
+        "checkpoint_step": checkpoint_step,
         "checkpoint_schema": 2,
         "checkpoint_train_fingerprint": TRAIN_FINGERPRINT,
         "delta_frames": 1,
@@ -198,6 +199,55 @@ def test_external_panel_zero_variance_is_inconclusive(tmp_path):
     report = _adjudicate(tmp_path, [-0.1] * 20)
     assert report["status"] == "INCONCLUSIVE_ZERO_VARIANCE_EXTERNAL_DEV20_ENDPOINT"
     assert report["second_seed_authorized"] is False
+
+
+def test_external_panel_accepts_an_explicit_step_2000_checkpoint(tmp_path):
+    checkpoint = tmp_path / "ckpt_2000.pt"
+    digest = _checkpoint(checkpoint, step=2000)
+    result = tmp_path / "result.json"
+    _write_result(
+        result,
+        checkpoint,
+        [-0.20 + 0.005 * index for index in range(20)],
+        checkpoint_step=2000,
+    )
+
+    report = adjudicate(
+        result,
+        checkpoint,
+        digest,
+        TRAINING_LIST,
+        TRAINING_SHA,
+        EXTERNAL_LIST,
+        EXTERNAL_SHA,
+        expected_checkpoint_step=2000,
+    )
+
+    assert report["status"] == "PASS_EXTERNAL_DEV20_ENDPOINT"
+    assert report["checkpoint_step"] == 2000
+
+
+def test_external_panel_rejects_a_step_mismatched_to_the_frozen_candidate(tmp_path):
+    checkpoint = tmp_path / "ckpt_2000.pt"
+    digest = _checkpoint(checkpoint, step=2000)
+    result = tmp_path / "result.json"
+    _write_result(
+        result,
+        checkpoint,
+        [-0.20 + 0.005 * index for index in range(20)],
+        checkpoint_step=2000,
+    )
+
+    with pytest.raises(ValueError, match="checkpoint step 1000"):
+        adjudicate(
+            result,
+            checkpoint,
+            digest,
+            TRAINING_LIST,
+            TRAINING_SHA,
+            EXTERNAL_LIST,
+            EXTERNAL_SHA,
+        )
 
 
 def test_external_panel_stops_disadvantage_or_nonphysical(tmp_path):

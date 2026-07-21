@@ -315,6 +315,8 @@ def test_external_dev20_runner_is_disjoint_evaluation_only_and_fail_closed():
     assert runner.index("systemd-run") < runner.index("nvidia-smi")
     assert "scripts/external_endpoint_panel_eval.py" in runner
     assert "scripts.adjudicate_external_endpoint_panel" in runner
+    assert 'EXPECTED_CHECKPOINT_STEP=${EXPECTED_CHECKPOINT_STEP:-1000}' in runner
+    assert runner.count('--expected-checkpoint-step "$EXPECTED_CHECKPOINT_STEP"') == 2
     assert "configs/subset_1000_length_proportional.txt" in runner
     assert "configs/external_dev_20_length_proportional_seed20260721.txt" in runner
     assert "39278d6dc3de52065b19dffb2438eae53fca3730572bba30496c1b116d597734" in runner
