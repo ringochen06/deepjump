@@ -19,6 +19,18 @@ from deepjump.evaluation import (
 )
 
 
+def _available_replica_frames(
+    available: list[tuple[int, int, int]], expected_temperature: int
+) -> list[tuple[int, int]]:
+    """Extract ``(replica, frames)`` from validated availability rows."""
+    rows = []
+    for temperature, replica, frames in available:
+        if int(temperature) != int(expected_temperature):
+            raise ValueError("availability temperature does not match the requested grid")
+        rows.append((int(replica), int(frames)))
+    return rows
+
+
 def audit(root: str, domain_list: str, domain_list_sha256: str, expected_bytes: int) -> dict:
     domain_ids, actual_sha256 = load_frozen_domain_ids(domain_list, domain_list_sha256)
     if len(domain_ids) != 20 or len(set(domain_ids)) != 20:
@@ -49,9 +61,10 @@ def audit(root: str, domain_list: str, domain_list_sha256: str, expected_bytes: 
             min_frames = None
             for temperature in MDCATH_TEMPERATURES:
                 available = handle.replicas(temperature, MDCATH_REPLICAS)
-                if [replica for replica, _, _ in available] != list(MDCATH_REPLICAS):
+                replica_frames = _available_replica_frames(available, temperature)
+                if [replica for replica, _ in replica_frames] != list(MDCATH_REPLICAS):
                     raise ValueError(f"{domain_id}/{temperature} replica grid is incomplete")
-                for replica, _, frames in available:
+                for replica, frames in replica_frames:
                     if int(frames) < 3:
                         raise ValueError(f"{domain_id}/{temperature}/{replica} has fewer than 3 frames")
                     first = np.asarray(handle.coords(temperature, replica, 0))

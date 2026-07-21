@@ -7,6 +7,7 @@ import torch
 
 from scripts.adjudicate_external_endpoint_panel import adjudicate
 from deepjump.utils import split_domains
+from scripts.audit_external_mdcath import _available_replica_frames
 from scripts.external_endpoint_identity import (
     _sha256,
     load_disjoint_panels,
@@ -22,6 +23,16 @@ EXTERNAL_SHA = "9fb229049aec41ac9b376b447938930e434c94b7e106dfe5dc1ae1ac8cdaf245
 TRAIN_FINGERPRINT = "a" * 64
 TEMPERATURES = [320, 348, 379, 413, 450]
 REPLICAS = [0, 1, 2, 3, 4]
+
+
+def test_external_audit_reads_replica_from_tuple_second_field():
+    available = [(320, replica, 101 + replica) for replica in REPLICAS]
+
+    assert _available_replica_frames(available, 320) == [
+        (replica, 101 + replica) for replica in REPLICAS
+    ]
+    with pytest.raises(ValueError, match="temperature"):
+        _available_replica_frames(available, 348)
 
 
 def _checkpoint(path: Path) -> str:
