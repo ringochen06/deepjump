@@ -7,6 +7,7 @@ import torch
 import pytest
 
 from scripts.train import fast_dev_gate_errors
+from scripts.verify_obsutil_empty_prefix import prefix_object_count
 from deepjump.config import load_config
 from deepjump.training import lr_at
 
@@ -84,6 +85,7 @@ def test_paper_horizon_ab_freezes_expected_lr_trajectories():
 
 def test_paper_horizon_ab_runner_is_matched_bounded_and_fail_closed():
     runner = Path("cloud/huawei/run_paper_horizon_ab2000.sh").read_text()
+    prefix_verifier = Path("scripts/verify_obsutil_empty_prefix.py").read_text()
     assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-600}' in runner
     assert '[[ "$HARD_STOP_MINUTES" == 600 ]]' in runner
     assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
@@ -112,8 +114,11 @@ def test_paper_horizon_ab_runner_is_matched_bounded_and_fail_closed():
     assert "second_seed_scientifically_eligible" in runner
     assert '[[ "$BUCKET" == "obs://deepjump-mdcath-cn4-ringochen" ]]' in runner
     assert "RUN_ID must be UTC basic timestamp" in runner
-    assert "refusing to reuse non-empty OBS evidence prefix" in runner
-    assert 'Object number\\s*(?:is)?\\s*:\\s*([0-9]+)' in runner
+    assert "refusing to reuse non-empty OBS evidence prefix" in prefix_verifier
+    assert "scripts/verify_obsutil_empty_prefix.py" in runner
+    assert "Object number" in prefix_verifier
+    assert "Folder number" in prefix_verifier
+    assert "File number" in prefix_verifier
     assert '"authorization_requires_independent_readback": True' in runner
     assert "final_markers.sha256" in runner
     assert '"$READBACK_TWO/audit/decision.json"' in runner
@@ -128,6 +133,33 @@ def test_paper_horizon_ab_runner_is_matched_bounded_and_fail_closed():
     assert "scripts/train_ddp.py" not in runner.split(
         "if [[ \"$training_ab_status\" == ADVANCE_PAPER_HORIZON_EXTERNAL20 ]]"
     )[1]
+
+
+@pytest.mark.parametrize(
+    ("report", "expected"),
+    [
+        ("Object number: 0\n", 0),
+        ("Object number is: 2\n", 2),
+        ("Folder number: 0\nFile number: 0\n", 0),
+        ("Folder number: 1\nFile number: 2\n", 3),
+    ],
+)
+def test_obsutil_prefix_count_supports_cloud_output_variants(report, expected):
+    assert prefix_object_count(report) == expected
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        "",
+        "Total size of prefix: 0B\n",
+        "Folder number: 0\n",
+        "File number: 0\n",
+    ],
+)
+def test_obsutil_prefix_count_rejects_incomplete_or_unknown_output(report):
+    with pytest.raises(ValueError, match="parseable object counts"):
+        prefix_object_count(report)
 
 
 def _write_checkpoint(

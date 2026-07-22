@@ -116,15 +116,8 @@ done
 command -v obsutil >/dev/null
 timeout 30s obsutil ls "$OBS_DST/" -limit=1 \
   | tee "$RUN_DIR/obs_prefix_preflight.log"
-"$PYTHON" - "$RUN_DIR/obs_prefix_preflight.log" <<'PY'
-import re, sys
-text = open(sys.argv[1]).read()
-match = re.search(r"Object number\s*(?:is)?\s*:\s*([0-9]+)", text)
-if not match:
-    raise SystemExit("OBS prefix preflight did not return a parseable object count")
-if int(match.group(1)) != 0:
-    raise SystemExit("refusing to reuse non-empty OBS evidence prefix")
-PY
+"$PYTHON" scripts/verify_obsutil_empty_prefix.py \
+  "$RUN_DIR/obs_prefix_preflight.log"
 if pgrep -af '[s]cripts/(train_ddp|guarded_endpoint_panel_eval|external_endpoint_panel_eval).py'; then
   printf 'conflicting training/evaluation process exists\n' >&2
   exit 2
