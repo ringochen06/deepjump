@@ -90,6 +90,26 @@ def _local_geometry(pred: torch.Tensor, target: torch.Tensor, bond_mask: torch.T
     }
 
 
+def _local_geometry_by_start(
+    pred: torch.Tensor, target: torch.Tensor, bond_mask: torch.Tensor
+) -> dict[str, list[float]]:
+    """Retain bond mean and maximum separately for every rollout start."""
+    if pred.shape[0] != target.shape[0] or pred.shape[0] != bond_mask.shape[0]:
+        raise ValueError("per-start geometry batch dimensions must match")
+    rows = [
+        _local_geometry(
+            pred[index:index + 1],
+            target[index:index + 1],
+            bond_mask[index:index + 1],
+        )
+        for index in range(pred.shape[0])
+    ]
+    return {
+        "bond_mean_by_start": [row["bond_mean"] for row in rows],
+        "bond_max_by_start": [row["bond_max"] for row in rows],
+    }
+
+
 def teacher_forced_mean_trajectory(
     model,
     real_positions: list[torch.Tensor],
@@ -150,6 +170,10 @@ def main() -> None:
     ap.add_argument(
         "--teacher-forced-mean", action="store_true",
         help="Also evaluate deterministic one-step predictions from each real preceding frame.",
+    )
+    ap.add_argument(
+        "--per-start-geometry", action="store_true",
+        help="Also retain bond mean and maximum separately for every rollout start.",
     )
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
@@ -268,6 +292,9 @@ def main() -> None:
                 "rmsd", "rmsd_by_start", "fnc", "bond_mean", "bond_p95", "bond_p99", "bond_max",
                 "bond_mae_real", "angle_cos_mae_real",
             )}
+            if args.per_start_geometry:
+                metrics["bond_mean_by_start"] = []
+                metrics["bond_max_by_start"] = []
             for step, (pred, _) in enumerate(trajectory):
                 rmsd = [aligned_ca_rmsd(pred[i], real[step][i]).item() for i in range(len(starts))]
                 fnc = contact_fraction_native(pred, real[step], batch["residue_mask"])
@@ -277,6 +304,12 @@ def main() -> None:
                 geometry = _local_geometry(pred, real[step], batch["bond_mask"])
                 for name, value in geometry.items():
                     metrics[name].append(value)
+                if args.per_start_geometry:
+                    per_start = _local_geometry_by_start(
+                        pred, real[step], batch["bond_mask"]
+                    )
+                    for name, values in per_start.items():
+                        metrics[name].append(values)
             domain_methods[method] = metrics
         rows.append({
             "domain": h.name,
@@ -291,11 +324,14 @@ def main() -> None:
     methods = ["noop", "one_step_persistence", *requested_methods]
     if args.teacher_forced_mean:
         methods.append("teacher_forced_mean")
+    settings = vars(args).copy()
+    if not args.per_start_geometry:
+        settings.pop("per_start_geometry")
     result = {
         "checkpoint": args.ckpt,
         "checkpoint_sha256": checkpoint_sha256,
         "checkpoint_step": ck["step"],
-        "settings": vars(args),
+        "settings": settings,
         "preprocessing": {
             "canon_symmetric": bool(cd.get("canon_symmetric", False)),
         },

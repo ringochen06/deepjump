@@ -3,6 +3,7 @@ import torch
 
 from scripts.rollout_robustness_eval import (
     _local_geometry,
+    _local_geometry_by_start,
     one_step_persistence_trajectory,
     select_validation_domains,
     summarize_domains,
@@ -43,6 +44,25 @@ def test_local_geometry_reports_tails_and_respects_gaps():
     assert np.isclose(stats["bond_max"], 1.0)
     assert stats["bond_mae_real"] == 0.0
     assert stats["angle_cos_mae_real"] > 0.0
+
+
+def test_local_geometry_by_start_does_not_pool_collapsed_start():
+    target = torch.tensor([
+        [[0.0, 0.0, 0.0], [3.8, 0.0, 0.0]],
+        [[0.0, 0.0, 0.0], [3.8, 0.0, 0.0]],
+    ])
+    pred = torch.tensor([
+        [[0.0, 0.0, 0.0], [2.6, 0.0, 0.0]],
+        [[0.0, 0.0, 0.0], [4.2, 0.0, 0.0]],
+    ])
+    bond_mask = torch.ones(2, 1, dtype=torch.bool)
+
+    pooled = _local_geometry(pred, target, bond_mask)
+    per_start = _local_geometry_by_start(pred, target, bond_mask)
+
+    assert np.isclose(pooled["bond_mean"], 3.4)
+    assert np.allclose(per_start["bond_mean_by_start"], [2.6, 4.2])
+    assert np.allclose(per_start["bond_max_by_start"], [2.6, 4.2])
 
 
 def test_rollout_static_fields_preserve_atom_mask_for_joint_source_noise():
