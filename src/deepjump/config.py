@@ -46,6 +46,8 @@ class ModelConfig:
     paper_ff: bool = False  # Algorithm-2-style F=2 scalar/vector feed-forward
     tensor_cloud01: bool = False  # dedicated equal-multiplicity l=0/l=1 Algorithm-1/2 path
     tensor_cloud01_vector_only_attention: bool = False  # omit scalar q/k/v attention branch
+    # Restore the normalized scalar value/output residual while retaining vector-only logits.
+    tensor_cloud01_vector_only_scalar_value: bool = False
 
 
 @dataclass

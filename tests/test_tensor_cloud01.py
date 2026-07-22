@@ -89,14 +89,56 @@ def test_vector_only_attention_ignores_scalar_content_and_has_no_scalar_projecti
         assert torch.isfinite(parameter.grad).all(), name
 
 
-@pytest.mark.parametrize("vector_only_attention", [False, True])
+def test_vector_logit_scalar_value_restores_only_scalar_value_residual():
+    torch.manual_seed(41)
+    attention = TensorCloud01Attention(
+        hidden=8,
+        num_heads=2,
+        vector_only=True,
+        scalar_value_only=True,
+    )
+    assert not hasattr(attention, "to_qkv_scalar")
+    assert hasattr(attention, "to_value_scalar")
+    assert hasattr(attention, "out_scalar")
+
+    scalar_a = torch.randn(1, 4, 8, requires_grad=True)
+    scalar_b = scalar_a.detach() * 100
+    vector = torch.randn(1, 4, 8, 3, requires_grad=True)
+    positions = torch.randn(1, 4, 3)
+    mask = torch.ones(1, 4, dtype=torch.bool)
+
+    assert torch.equal(
+        attention._content_logits(scalar_a, vector),
+        attention._content_logits(scalar_b, vector),
+    )
+    scalar_out_a, vector_out_a = attention(
+        scalar_a, vector, positions, mask
+    )
+    scalar_out_b, vector_out_b = attention(
+        scalar_b, vector, positions, mask
+    )
+    assert not torch.equal(scalar_out_a, scalar_out_b)
+    assert torch.equal(vector_out_a, vector_out_b)
+
+    (scalar_out_a.square().mean() + vector_out_a.square().mean()).backward()
+    for name, parameter in attention.named_parameters():
+        assert parameter.grad is not None, name
+        assert torch.isfinite(parameter.grad).all(), name
+
+
+@pytest.mark.parametrize(
+    ("vector_only_attention", "vector_only_scalar_value"),
+    [(False, False), (True, False), (True, True)],
+)
 def test_tensor_cloud01_rotation_translation_mask_and_gradients(
     vector_only_attention,
+    vector_only_scalar_value,
 ):
     torch.manual_seed(5)
     block = TensorCloud01Block(
         8, 2, 4, 4, 10.0,
         vector_only_attention=vector_only_attention,
+        vector_only_scalar_value=vector_only_scalar_value,
     )
     scalar = torch.randn(2, 5, 8, requires_grad=True)
     vector = torch.randn(2, 5, 8, 3, requires_grad=True)
@@ -122,10 +164,16 @@ def test_tensor_cloud01_rotation_translation_mask_and_gradients(
         assert torch.isfinite(parameter.grad).all(), name
 
 
-@pytest.mark.parametrize("vector_only", [False, True])
-def test_attention_all_mask_is_finite_and_zero(vector_only):
+@pytest.mark.parametrize(
+    ("vector_only", "scalar_value_only"),
+    [(False, False), (True, False), (True, True)],
+)
+def test_attention_all_mask_is_finite_and_zero(vector_only, scalar_value_only):
     attention = TensorCloud01Attention(
-        hidden=8, num_heads=2, vector_only=vector_only
+        hidden=8,
+        num_heads=2,
+        vector_only=vector_only,
+        scalar_value_only=scalar_value_only,
     )
     scalar_out, vector_out = attention(
         torch.randn(1, 3, 8),
@@ -151,6 +199,11 @@ def test_feedforward_equal_multiplicity_and_model_config_fail_closed():
         ))
     with pytest.raises(ValueError, match="requires tensor_cloud01"):
         DeepJumpLite(ModelConfig(tensor_cloud01_vector_only_attention=True))
+    with pytest.raises(ValueError, match="requires tensor_cloud01_vector_only_attention"):
+        DeepJumpLite(ModelConfig(
+            tensor_cloud01=True,
+            tensor_cloud01_vector_only_scalar_value=True,
+        ))
 
     model = DeepJumpLite(ModelConfig(
         hidden=8, vector_channels=8, num_heads=2,
@@ -256,6 +309,101 @@ def test_tensor_cloud01_vector_only_parameter_scaling_and_checkpoint_isolation()
         vector_only.load_state_dict(full_tensor.state_dict(), strict=True)
     with pytest.raises(RuntimeError, match="Missing key|Unexpected key"):
         full_tensor.load_state_dict(vector_only.state_dict(), strict=True)
+
+
+def test_tensor_cloud01_vector_logit_scalar_value_parameter_scaling_and_isolation():
+    counts = []
+    for hidden in (32, 64, 128):
+        scaled = DeepJumpLite(ModelConfig(
+            hidden=hidden, vector_channels=hidden, num_heads=4,
+            cond_layers=6, transport_layers=6,
+            predict_heavy=True, tensor_cloud01=True,
+            tensor_cloud01_vector_only_attention=True,
+            tensor_cloud01_vector_only_scalar_value=True,
+        ), predict_heavy=True)
+        counts.append(count_parameters(scaled))
+    assert counts == [290_592, 1_126_112, 4_443_744]
+
+    common = dict(
+        hidden=8, vector_channels=8, num_heads=2,
+        cond_layers=1, transport_layers=1,
+        predict_heavy=True, tensor_cloud01=True,
+        tensor_cloud01_vector_only_attention=True,
+    )
+    vector_only = DeepJumpLite(ModelConfig(**common), predict_heavy=True)
+    scalar_value = DeepJumpLite(ModelConfig(
+        **common, tensor_cloud01_vector_only_scalar_value=True
+    ), predict_heavy=True)
+    batch, residues = 2, 4
+    data = {
+        "P_t": torch.randn(batch, residues, 3),
+        "V_t": torch.randn(batch, residues, 13, 3),
+        "P_1": torch.randn(batch, residues, 3),
+        "V_1": torch.randn(batch, residues, 13, 3),
+        "res_index": torch.randint(0, 20, (batch, residues)),
+        "delta_ns": torch.ones(batch),
+        "residue_mask": torch.ones(batch, residues, dtype=torch.bool),
+        "atom_mask": torch.ones(batch, residues, 13, dtype=torch.bool),
+    }
+    output = scalar_value(data, tau=torch.full((batch,), 0.25))
+    (output["P_hat_1"].square().mean() + output["V_hat_1"].square().mean()).backward()
+    expected_unused = {
+        "transport.blocks.0.feedforward.scalar_out.weight",
+        "transport.blocks.0.feedforward.scalar_out.bias",
+    }
+    actual_unused = {
+        name for name, parameter in scalar_value.named_parameters()
+        if parameter.grad is None
+    }
+    assert actual_unused == expected_unused
+
+    with pytest.raises(RuntimeError, match="Missing key|Unexpected key"):
+        scalar_value.load_state_dict(vector_only.state_dict(), strict=True)
+    with pytest.raises(RuntimeError, match="Missing key|Unexpected key"):
+        vector_only.load_state_dict(scalar_value.state_dict(), strict=True)
+
+
+def test_vector_scalar_value_keeps_all_shared_initial_weights_bitwise():
+    common = dict(
+        hidden=8, vector_channels=8, num_heads=2,
+        cond_layers=2, transport_layers=2,
+        predict_heavy=True, tensor_cloud01=True,
+        tensor_cloud01_vector_only_attention=True,
+    )
+    torch.manual_seed(47)
+    vector_only = DeepJumpLite(ModelConfig(**common), predict_heavy=True)
+    torch.manual_seed(47)
+    scalar_value = DeepJumpLite(ModelConfig(
+        **common, tensor_cloud01_vector_only_scalar_value=True
+    ), predict_heavy=True)
+
+    vector_state = vector_only.state_dict()
+    scalar_value_state = scalar_value.state_dict()
+    candidate_only = {
+        name for name in scalar_value_state if (
+            ".norm1.scalar_norm." in name
+            or ".to_value_scalar." in name
+            or ".out_scalar." in name and ".attention." in name
+        )
+    }
+    assert candidate_only
+    assert set(vector_state) == set(scalar_value_state) - candidate_only
+    for name, value in vector_state.items():
+        assert torch.equal(value, scalar_value_state[name]), name
+    for container in (
+        scalar_value.conditioner.blocks,
+        scalar_value.transport.blocks,
+    ):
+        candidate_weights = []
+        for block in container:
+            scalar_value_weight = block.attention.to_value_scalar.weight
+            assert not torch.equal(
+                scalar_value_weight,
+                block.feedforward.scalar_in.weight[: scalar_value_weight.shape[0]],
+            )
+            candidate_weights.append(scalar_value_weight)
+        for left, right in zip(candidate_weights, candidate_weights[1:]):
+            assert not torch.equal(left, right)
 
 
 def test_tensor_cloud01_checkpoint_roundtrip_and_mismatch_fail_closed():
