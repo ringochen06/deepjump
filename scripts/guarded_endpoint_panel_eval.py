@@ -88,11 +88,13 @@ FROZEN_BASELINE_PROFILE = "frozen-baseline"
 HORIZON_AB_BASELINE_PROFILE = "paper-horizon-ab-baseline1000"
 PAPER_HORIZON_PROFILE = "paper-horizon-500k"
 PAPER_VECTOR_PROFILE = "paper-horizon-vector-only-500k"
+PAPER_SCALAR_VALUE_PROFILE = "paper-horizon-vector-scalar-value-500k"
 CHECKPOINT_PROFILES = (
     FROZEN_BASELINE_PROFILE,
     HORIZON_AB_BASELINE_PROFILE,
     PAPER_HORIZON_PROFILE,
     PAPER_VECTOR_PROFILE,
+    PAPER_SCALAR_VALUE_PROFILE,
 )
 
 _PAPER_HORIZON_DATA_CONFIG = {
@@ -128,6 +130,7 @@ _PAPER_HORIZON_MODEL_CONFIG = {
     "paper_ff": False,
     "tensor_cloud01": True,
     "tensor_cloud01_vector_only_attention": False,
+    "tensor_cloud01_vector_only_scalar_value": False,
 }
 _PAPER_HORIZON_TRAIN_CONFIG = {
     "batch_size": 2,
@@ -172,6 +175,7 @@ def checkpoint_profile_requirements(
         HORIZON_AB_BASELINE_PROFILE,
         PAPER_HORIZON_PROFILE,
         PAPER_VECTOR_PROFILE,
+        PAPER_SCALAR_VALUE_PROFILE,
     }:
         raise ValueError("unknown checkpoint profile")
     if len(checkpoint_sha256) != 64 or any(
@@ -183,14 +187,22 @@ def checkpoint_profile_requirements(
         out_dir = "runs/v100_tensorcloud01_full_d1_fp32_horizon_ab_baseline2000"
     elif profile == PAPER_HORIZON_PROFILE:
         out_dir = "runs/v100_tensorcloud01_full_d1_fp32_paper_horizon500k_2000"
-    else:
+    elif profile == PAPER_VECTOR_PROFILE:
         out_dir = (
             "runs/v100_tensorcloud01_vector_only_d1_fp32_"
             "paper_horizon500k_2000"
         )
+    else:
+        out_dir = (
+            "runs/v100_tensorcloud01_vector_scalar_value_d1_fp32_"
+            "paper_horizon500k_2000"
+        )
     model = dict(_PAPER_HORIZON_MODEL_CONFIG)
     model["tensor_cloud01_vector_only_attention"] = (
-        profile == PAPER_VECTOR_PROFILE
+        profile in {PAPER_VECTOR_PROFILE, PAPER_SCALAR_VALUE_PROFILE}
+    )
+    model["tensor_cloud01_vector_only_scalar_value"] = (
+        profile == PAPER_SCALAR_VALUE_PROFILE
     )
     train = {
         **_PAPER_HORIZON_TRAIN_CONFIG,

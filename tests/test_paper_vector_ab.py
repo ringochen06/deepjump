@@ -13,6 +13,7 @@ from scripts.external_endpoint_identity import (
 )
 from scripts.guarded_endpoint_panel_eval import (
     PAPER_HORIZON_PROFILE,
+    PAPER_SCALAR_VALUE_PROFILE,
     PAPER_VECTOR_PROFILE,
     checkpoint_profile_requirements,
 )
@@ -199,6 +200,74 @@ def test_paper_vector_profile_binds_exact_recipe_and_architecture(tmp_path):
             digest,
             expected_step=2000,
             expected_model_config=wrong_model,
+        )
+
+
+def test_scalar_value_profile_is_disjoint_from_pure_vector_profile(tmp_path):
+    config = to_dict(load_config(
+        "configs/v100_tensorcloud01_vector_scalar_value_d1_fp32_"
+        "paper_horizon500k_2000.yaml"
+    ))
+    checkpoint = tmp_path / "scalar_value.pt"
+    torch.save({
+        "step": 2000,
+        "checkpoint_schema": 2,
+        "cfg": config,
+        "model": {"weight": torch.ones(1)},
+        "train_state": {"world_size": 8, "train_fingerprint": "e" * 64},
+    }, checkpoint)
+    digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    expected_data, expected_model, expected_train = checkpoint_profile_requirements(
+        PAPER_SCALAR_VALUE_PROFILE, digest
+    )
+    loaded, _ = verify_multidomain_checkpoint(
+        checkpoint,
+        digest,
+        expected_step=2000,
+        expected_data_config=expected_data,
+        expected_model_config=expected_model,
+        expected_train_config=expected_train,
+    )
+    assert loaded["cfg"]["model"]["tensor_cloud01_vector_only_attention"] is True
+    assert loaded["cfg"]["model"]["tensor_cloud01_vector_only_scalar_value"] is True
+
+    _, vector_model, _ = checkpoint_profile_requirements(
+        PAPER_VECTOR_PROFILE, digest
+    )
+    with pytest.raises(ValueError, match="scalar_value"):
+        verify_multidomain_checkpoint(
+            checkpoint,
+            digest,
+            expected_step=2000,
+            expected_model_config=vector_model,
+        )
+
+
+@pytest.mark.parametrize("invalid", [0, 1, "true", None])
+def test_scalar_value_profile_rejects_non_boolean_flag(tmp_path, invalid):
+    config = to_dict(load_config(
+        "configs/v100_tensorcloud01_vector_scalar_value_d1_fp32_"
+        "paper_horizon500k_2000.yaml"
+    ))
+    config["model"]["tensor_cloud01_vector_only_scalar_value"] = invalid
+    checkpoint = tmp_path / "scalar_value.pt"
+    torch.save({
+        "step": 2000,
+        "checkpoint_schema": 2,
+        "cfg": config,
+        "model": {"weight": torch.ones(1)},
+        "train_state": {"world_size": 8, "train_fingerprint": "e" * 64},
+    }, checkpoint)
+    digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    _, expected_model, _ = checkpoint_profile_requirements(
+        PAPER_SCALAR_VALUE_PROFILE, digest
+    )
+    with pytest.raises(ValueError, match="not boolean"):
+        verify_multidomain_checkpoint(
+            checkpoint,
+            digest,
+            expected_step=2000,
+            expected_model_config=expected_model,
         )
 
 

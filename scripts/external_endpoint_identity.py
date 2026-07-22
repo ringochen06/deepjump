@@ -102,7 +102,18 @@ def verify_multidomain_checkpoint(
         ):
             raise ValueError("checkpoint vector-only architecture flag mismatch")
         for key, expected in expected_model_config.items():
-            if model_cfg.get(key) != expected:
+            actual = (
+                model_cfg.get(key, False)
+                if key == "tensor_cloud01_vector_only_scalar_value"
+                else model_cfg.get(key)
+            )
+            if key == "tensor_cloud01_vector_only_scalar_value" and (
+                type(actual) is not bool or type(expected) is not bool
+            ):
+                raise ValueError(
+                    "checkpoint scalar-value architecture flag is not boolean"
+                )
+            if actual != expected:
                 raise ValueError(f"checkpoint model.{key} mismatch")
     if train_cfg.get("seed") != 0 or train_cfg.get("amp") is not False:
         raise ValueError("checkpoint is not the frozen seed-0 FP32 pilot")

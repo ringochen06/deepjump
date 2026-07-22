@@ -21,6 +21,7 @@ def validate_checkpoint(
     expected_delta: int | None = None,
     require_vector_only: bool = False,
     require_full_tensor: bool = False,
+    require_vector_scalar_value: bool = False,
     expected_lr_horizon_steps: int | None = None,
 ) -> tuple[dict, list[str]]:
     errors: list[str] = []
@@ -50,11 +51,22 @@ def validate_checkpoint(
             errors.append("checkpoint is not the reviewed TensorCloud01 architecture")
         if model_config.get("tensor_cloud01_vector_only_attention") is not True:
             errors.append("checkpoint is not the reviewed vector-only attention candidate")
+        if model_config.get("tensor_cloud01_vector_only_scalar_value", False) is not False:
+            errors.append("checkpoint is not the pure vector-only attention candidate")
     if require_full_tensor:
         if model_config.get("tensor_cloud01") is not True:
             errors.append("checkpoint is not the reviewed TensorCloud01 architecture")
         if model_config.get("tensor_cloud01_vector_only_attention", False) is not False:
             errors.append("checkpoint is not the reviewed full-tensor attention candidate")
+        if model_config.get("tensor_cloud01_vector_only_scalar_value", False) is not False:
+            errors.append("full-tensor checkpoint has an invalid scalar-value variant flag")
+    if require_vector_scalar_value:
+        if model_config.get("tensor_cloud01") is not True:
+            errors.append("checkpoint is not the reviewed TensorCloud01 architecture")
+        if model_config.get("tensor_cloud01_vector_only_attention") is not True:
+            errors.append("checkpoint does not use vector-only attention logits")
+        if model_config.get("tensor_cloud01_vector_only_scalar_value") is not True:
+            errors.append("checkpoint is not the normalized scalar-value candidate")
     if (
         expected_lr_horizon_steps is not None
         and train_config.get("lr_horizon_steps") != expected_lr_horizon_steps
@@ -109,6 +121,9 @@ def validate_checkpoint(
         "vector_only_attention": bool(
             model_config.get("tensor_cloud01_vector_only_attention", False)
         ),
+        "vector_only_scalar_value": bool(
+            model_config.get("tensor_cloud01_vector_only_scalar_value", False)
+        ),
         "lr_horizon_steps": train_config.get("lr_horizon_steps"),
         "model_tensors": len(model_state) if isinstance(model_state, dict) else 0,
         "nonfinite_model_tensors": nonfinite_parameters,
@@ -131,6 +146,7 @@ def main() -> None:
     architecture = parser.add_mutually_exclusive_group()
     architecture.add_argument("--require-vector-only", action="store_true")
     architecture.add_argument("--require-full-tensor", action="store_true")
+    architecture.add_argument("--require-vector-scalar-value", action="store_true")
     parser.add_argument("--expected-lr-horizon-steps", type=int)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -145,6 +161,7 @@ def main() -> None:
             args.expected_delta,
             args.require_vector_only,
             args.require_full_tensor,
+            args.require_vector_scalar_value,
             args.expected_lr_horizon_steps,
         )
     except Exception as exc:  # noqa: BLE001 - convert corrupt artifacts into a gate failure

@@ -30,6 +30,7 @@ class Conditioner(nn.Module):
         paper_ff: bool = False,
         tensor_cloud01: bool = False,
         tensor_cloud01_vector_only_attention: bool = False,
+        tensor_cloud01_vector_only_scalar_value: bool = False,
     ):
         super().__init__()
         self.res_embed = ResidueEmbedding(hidden)
@@ -42,6 +43,9 @@ class Conditioner(nn.Module):
                 TensorCloud01Block(
                     hidden, num_heads, seq_ks, num_dist_basis, dist_cutoff,
                     vector_only_attention=tensor_cloud01_vector_only_attention,
+                    vector_only_scalar_value=(
+                        tensor_cloud01_vector_only_scalar_value
+                    ),
                 )
                 for _ in range(num_layers)
             )

@@ -62,3 +62,9 @@ def test_rejects_wrong_calibration_identity():
         select_checkpoints(
             _history(), wrong, expected_delta=1, require_vector_only=True
         )
+    wrong = copy.deepcopy(_config())
+    wrong["model"]["tensor_cloud01_vector_only_scalar_value"] = True
+    with pytest.raises(ValueError, match="pure vector-only"):
+        select_checkpoints(
+            _history(), wrong, expected_delta=1, require_vector_only=True
+        )

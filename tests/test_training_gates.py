@@ -206,6 +206,54 @@ def test_paper_vector_ab_runner_is_single_arm_bounded_and_fail_closed():
     assert "Paper-vector A/B complete; seed1/untouched/formal training was not started." in runner
 
 
+def test_scalar_value_ab_runner_is_training_only_and_fail_closed():
+    runner = Path("cloud/huawei/run_paper_scalar_value_ab2000.sh").read_text()
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-420}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 420 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
+    assert "/usr/bin/systemctl poweroff" in runner
+    assert '[[ -z "$(git status --porcelain)" ]]' in runner
+    assert "scripts/verify_obsutil_empty_prefix.py" in runner
+    assert "scripts/verify_paper_vector_readback.py" in runner
+    assert "scripts/verify_paper_scalar_value_readback.py" in runner
+    assert "20260722T051048Z" in runner
+    assert "fd92112c9ab7c3e941138a95b136f51c29558353" in runner
+    assert "19d960826938419e1bf494701a09b395ece729e1c0dc2c8a5d1e6bf36d73053b" in runner
+    assert "36f8850ba4e9c094526850370b22371d10df76765eead3e39adf051e68d0d80e" in runner
+    assert "0816f94b01bf8b434086677d59c913193a70aa8b802f79b46378590f772af7bf" in runner
+    assert "v100_tensorcloud01_vector_scalar_value_d1_fp32_" in runner
+    assert runner.count("scripts/train_ddp.py --config") == 1
+    assert "--resume" not in runner
+    assert "--warm-start" not in runner
+    assert "world=8 params=4,443,744 effective_batch=128" in runner
+    assert runner.count("--require-vector-only") >= 2
+    assert runner.count("--require-vector-scalar-value") >= 2
+    assert runner.count("scripts/guarded_endpoint_panel_eval.py") == 1
+    assert "run_training_panel baseline" in runner
+    assert "run_training_panel candidate" in runner
+    assert "paper-horizon-vector-only-500k" in runner
+    assert "paper-horizon-vector-scalar-value-500k" in runner
+    assert "scripts/adjudicate_paper_scalar_value_ab.py" in runner
+    assert "--baseline-replay-decision" in runner
+    assert "--evidence-manifest" in runner
+    assert '"$SOURCE_READBACK/audit/summary.json"' in runner
+    assert '"$SOURCE_READBACK/audit/readback_completion.json"' in runner
+    assert '"$RUN_DIR/sealed_baseline_decision.json"' in runner
+    assert '"$RUN_DIR/candidate_config.yaml"' in runner
+    assert "external_development_authorized\": False" in runner
+    assert "scripts/download_mdcath.py" not in runner
+    assert "claim_external_panel.py" not in runner
+    assert 'verify_readback "$READBACK_ONE"' in runner
+    assert 'verify_readback "$READBACK_TWO"' in runner
+    assert 'verify_final_readback "$FINAL_READBACK_ONE"' in runner
+    assert 'verify_final_readback "$FINAL_READBACK_TWO"' in runner
+    assert "OBS_PRECOMPLETION_DOUBLE_READBACK_PASS" in runner
+    assert "external/seed1/untouched/formal were not started" in runner
+
+
 def test_paper_horizon_postrun_certifier_is_read_only_bounded_and_source_bound():
     runner = Path("cloud/huawei/certify_paper_horizon_postrun.sh").read_text()
     assert "HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-45}" in runner
@@ -274,7 +322,8 @@ def test_obsutil_prefix_count_rejects_malformed_count_lines(report):
 
 
 def _write_checkpoint(
-    tmp_path: Path, *, world_size=8, step=10, finite=True, vector_only=True
+    tmp_path: Path, *, world_size=8, step=10, finite=True, vector_only=True,
+    scalar_value=False,
 ):
     checkpoint = tmp_path / "ckpt_10.pt"
     value = torch.tensor([1.0 if finite else float("nan")])
@@ -289,6 +338,7 @@ def _write_checkpoint(
                 "model": {
                     "tensor_cloud01": True,
                     "tensor_cloud01_vector_only_attention": vector_only,
+                    "tensor_cloud01_vector_only_scalar_value": scalar_value,
                 },
             },
             "checkpoint_schema": 2,
@@ -376,6 +426,42 @@ def test_checkpoint_gate_rejects_wrong_attention_variant(tmp_path):
     )
     assert result.returncode != 0
     assert "vector-only" in result.stderr
+
+
+def test_checkpoint_gate_keeps_vector_and_scalar_value_variants_disjoint(tmp_path):
+    checkpoint, history = _write_checkpoint(tmp_path, scalar_value=True)
+    rejected = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_training_checkpoint.py",
+            "--checkpoint", str(checkpoint),
+            "--history", str(history),
+            "--expected-step", "10",
+            "--expected-world-size", "8",
+            "--require-vector-only",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert rejected.returncode != 0
+    assert "pure vector-only" in rejected.stderr
+
+    accepted = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_training_checkpoint.py",
+            "--checkpoint", str(checkpoint),
+            "--history", str(history),
+            "--expected-step", "10",
+            "--expected-world-size", "8",
+            "--require-vector-scalar-value",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    report = json.loads(accepted.stdout)
+    assert report["vector_only_scalar_value"] is True
 
 
 def test_checkpoint_gate_accepts_full_tensor_and_rejects_vector_only(tmp_path):
