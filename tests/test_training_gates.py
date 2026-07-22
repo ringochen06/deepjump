@@ -155,10 +155,28 @@ def test_obsutil_prefix_count_supports_cloud_output_variants(report, expected):
         "Total size of prefix: 0B\n",
         "Folder number: 0\n",
         "File number: 0\n",
+        "Object number: 0\nObject number: 3\n",
+        "Object number: 0\nFolder number: 1\nFile number: 0\n",
+        "Object number: 0\nFolder number: 0\nFile number: 0\n",
+        "Folder number: 0\nFolder number: 2\nFile number: 0\n",
+        "Folder number: 0\nFile number: 0\nFile number: 2\n",
     ],
 )
 def test_obsutil_prefix_count_rejects_incomplete_or_unknown_output(report):
-    with pytest.raises(ValueError, match="parseable object counts"):
+    with pytest.raises(ValueError, match="count|format"):
+        prefix_object_count(report)
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        "Object number: not-a-number\n",
+        "Folder number: 0 objects\nFile number: 0\n",
+        "prefix Object number: 0\n",
+    ],
+)
+def test_obsutil_prefix_count_rejects_malformed_count_lines(report):
+    with pytest.raises(ValueError, match="malformed count line"):
         prefix_object_count(report)
 
 

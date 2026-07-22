@@ -10,15 +10,28 @@ from pathlib import Path
 
 def prefix_object_count(text: str) -> int:
     """Return the parsed object count for supported ``obsutil ls`` formats."""
-    object_match = re.search(r"Object number\s*(?:is)?\s*:\s*([0-9]+)", text)
-    if object_match:
-        return int(object_match.group(1))
+    count_names = ("Object number", "Folder number", "File number")
+    counts: dict[str, list[int]] = {name: [] for name in count_names}
+    pattern = re.compile(
+        r"(Object number|Folder number|File number)\s*(?:is)?\s*:\s*([0-9]+)"
+    )
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not any(name in line for name in count_names):
+            continue
+        match = pattern.fullmatch(line)
+        if match is None:
+            raise ValueError("OBS prefix preflight contains a malformed count line")
+        counts[match.group(1)].append(int(match.group(2)))
 
-    folder_match = re.search(r"Folder number\s*:\s*([0-9]+)", text)
-    file_match = re.search(r"File number\s*:\s*([0-9]+)", text)
-    if folder_match and file_match:
-        return int(folder_match.group(1)) + int(file_match.group(1))
-    raise ValueError("OBS prefix preflight did not return parseable object counts")
+    objects = counts["Object number"]
+    folders = counts["Folder number"]
+    files = counts["File number"]
+    if len(objects) == 1 and not folders and not files:
+        return objects[0]
+    if not objects and len(folders) == len(files) == 1:
+        return folders[0] + files[0]
+    raise ValueError("OBS prefix preflight requires one unique, unmixed count format")
 
 
 def main() -> None:
