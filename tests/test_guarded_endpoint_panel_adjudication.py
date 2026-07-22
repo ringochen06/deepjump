@@ -19,6 +19,8 @@ from scripts.guarded_endpoint_panel_eval import (
     EXTERNAL_SCOPE,
     PAPER_HORIZON_EXTERNAL_SCOPE,
     PAPER_HORIZON_PROFILE,
+    PAPER_VECTOR_EXTERNAL_SCOPE,
+    PAPER_VECTOR_PROFILE,
     SCOPE,
 )
 
@@ -367,6 +369,118 @@ def test_paper_horizon_external_individual_gate_defers_seed1_to_ab(tmp_path, mon
     )
     assert report["status"] == "PASS_CONDITIONAL_SAFEGUARD_PAPER_HORIZON_EXTERNAL20"
     assert report["external_development_gate_completed"] is True
+    assert report["second_seed_authorized"] is False
+    assert report["formal_training_authorized"] is False
+
+
+def test_paper_vector_external_individual_gate_is_profile_and_prerequisite_bound(
+    tmp_path, monkeypatch
+):
+    checkpoint = tmp_path / "candidate_2000.pt"
+    checkpoint.write_bytes(b"candidate identity is supplied by the run contract")
+    checkpoint_sha = "b" * 64
+    baseline_checkpoint_sha = "a" * 64
+    payload = _result_payload(checkpoint)
+    old_ids = payload["domain_panel"]["ids"]
+    panel_list = Path(
+        "configs/paper_horizon_external_dev_20_length_proportional_seed20260723.txt"
+    )
+    panel_ids = panel_list.read_text().splitlines()
+    mapping = dict(zip(old_ids, panel_ids))
+    payload["scope"] = PAPER_VECTOR_EXTERNAL_SCOPE
+    payload["checkpoint_sha256"] = checkpoint_sha
+    payload["checkpoint_profile"] = PAPER_VECTOR_PROFILE
+    payload["domain_panel"] = {
+        "sha256": EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256,
+        "ids": panel_ids,
+        "subset_of_training1000": False,
+        "fresh_external": True,
+        "paper_horizon_external": True,
+        "paper_vector_external": True,
+        "exclusion_union_count": 1140,
+        "h5_files": 20,
+        "total_bytes": EXPECTED_PAPER_HORIZON_EXTERNAL_BYTES,
+    }
+    payload["prerequisite"] = {
+        "sha256": "f" * 64,
+        "status": "ADVANCE_PAPER_VECTOR_EXTERNAL20",
+    }
+    payload["external_evidence"] = {
+        "claim_sha256": "1" * 64,
+        "download_manifest_sha256": "2" * 64,
+        "inventory_sha256": "3" * 64,
+        "source_proof_sha256": "5" * 64,
+        "panel_sha256": EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256,
+        "run_id": "20260722T120000Z",
+        "commit": "4" * 40,
+    }
+    payload["mechanism_probe"]["domain"] = panel_ids[0]
+    payload["runtime_probe"]["domain"] = panel_ids[-1]
+    for domain in payload["domains"]:
+        domain["domain"] = mapping[domain["domain"]]
+        for cell in domain["cells"]:
+            cell["domain"] = domain["domain"]
+    result = tmp_path / "paper_vector_external_result.json"
+    result.write_text(json.dumps(payload))
+    prerequisite = tmp_path / "training_ab_decision.json"
+    prerequisite.write_text("{}")
+    claim = tmp_path / "claim.json"
+    claim.write_text("{}")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}")
+    source_proof = tmp_path / "source_proof.json"
+    source_proof.write_text("{}")
+    monkeypatch.setattr(
+        adjudicator,
+        "verify_multidomain_checkpoint",
+        lambda *args, **kw: ({"step": 2000}, TRAIN_FINGERPRINT),
+    )
+    monkeypatch.setattr(
+        adjudicator,
+        "verify_paper_vector_ab_prerequisite",
+        lambda *args, **kw: payload["prerequisite"],
+    )
+    monkeypatch.setattr(
+        adjudicator,
+        "verify_paper_vector_external_evidence",
+        lambda *args, **kw: payload["external_evidence"],
+    )
+    report = adjudicator.adjudicate(
+        result,
+        checkpoint,
+        checkpoint_sha,
+        TRAINING_LIST,
+        EXPECTED_TRAINING_SHA256,
+        panel_list,
+        EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256,
+        panel_kind="paper-vector-external",
+        checkpoint_profile=PAPER_VECTOR_PROFILE,
+        prior_external_domain_list=Path(
+            "configs/external_dev_20_length_proportional_seed20260721.txt"
+        ),
+        prior_external_domain_list_sha256=EXPECTED_PRIOR_EXTERNAL_SHA256,
+        prior_fresh_external_domain_list=Path(
+            "configs/guarded_external_dev_20_length_proportional_seed20260722.txt"
+        ),
+        prior_fresh_external_domain_list_sha256=EXPECTED_EXTERNAL_PANEL_SHA256,
+        untouched_domain_list=Path(
+            "configs/confirmation_100_length_proportional_seed20260717.txt"
+        ),
+        untouched_domain_list_sha256=EXPECTED_UNTOUCHED_SHA256,
+        prerequisite_decision=prerequisite,
+        prerequisite_decision_sha256="f" * 64,
+        baseline_checkpoint_sha256=baseline_checkpoint_sha,
+        candidate_checkpoint_sha256=checkpoint_sha,
+        external_claim=claim,
+        external_claim_sha256="1" * 64,
+        external_download_manifest=manifest,
+        external_download_manifest_sha256="2" * 64,
+        source_proof=source_proof,
+        source_proof_sha256="5" * 64,
+    )
+    assert report["status"] == "PASS_CONDITIONAL_SAFEGUARD_PAPER_VECTOR_EXTERNAL20"
+    assert report["external_development_gate_completed"] is True
+    assert report["external_evidence"] == payload["external_evidence"]
     assert report["second_seed_authorized"] is False
     assert report["formal_training_authorized"] is False
 

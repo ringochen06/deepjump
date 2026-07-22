@@ -135,6 +135,77 @@ def test_paper_horizon_ab_runner_is_matched_bounded_and_fail_closed():
     )[1]
 
 
+def test_paper_vector_ab_runner_is_single_arm_bounded_and_fail_closed():
+    runner = Path("cloud/huawei/run_paper_vector_ab2000.sh").read_text()
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-660}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 660 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
+    assert "systemctl is-active" in runner
+    assert "/usr/bin/systemctl poweroff" in runner
+    assert '[[ -z "$(git status --porcelain)" ]]' in runner
+    assert "scripts/verify_obsutil_empty_prefix.py" in runner
+    assert "scripts/verify_paper_vector_readback.py" in runner
+    assert "20260722T012922Z" in runner
+    assert "dbbc86daa1bc7dd123d52924f7ab6eed21c96b9b" in runner
+    assert "fb12d776b106867ca14a8f56476daf776a6296b6dca640f03c2188a75a69bb47" in runner
+    assert "868e3e44386163e61e61f6c0da60c160e3cb9f282e20c3ba7a9198208c64fa3f" in runner
+    assert "2367d8d29fc02e9a53ec8672b6cb4e2ef9f06ef9ae265f2cffd9f905dcd91d38" in runner
+    assert "scripts/verify_paper_vector_source_stop.py" in runner
+    assert "--source-runner cloud/huawei/run_paper_horizon_ab2000.sh" in runner
+    assert 'source_audit_one_sync.log' in runner
+    assert 'source_audit_two_sync.log' in runner
+    assert "v100_tensorcloud01_vector_only_d1_fp32_paper_horizon500k_2000.yaml" in runner
+    assert runner.count("scripts/train_ddp.py --config") == 1
+    assert 'scripts/train_ddp.py --config "$CANDIDATE_CONFIG"' in runner
+    assert "--resume" not in runner
+    assert "--warm-start" not in runner
+    assert "world=8 params=4,038,240 effective_batch=128" in runner
+    assert runner.count("--require-full-tensor") >= 2
+    assert runner.count("--require-vector-only") >= 2
+    assert runner.count("scripts/guarded_endpoint_panel_eval.py") == 2
+    assert "paper-horizon-500k" in runner
+    assert "paper-horizon-vector-only-500k" in runner
+    assert "scripts/rollout_robustness_eval.py" in runner
+    assert "--domains 3 --starts 2 --steps 20 --methods mean,ode_1" in runner
+    assert "scripts/adjudicate_paper_vector_ab.py" in runner
+    assert "ADVANCE_PAPER_VECTOR_EXTERNAL20" in runner
+    assert "SKIPPED_PAPER_VECTOR_EXTERNAL20" in runner
+    assert "paper_horizon_external_dev_20_length_proportional_seed20260723.txt" in runner
+    external_branch = runner.split(
+        'if [[ "$training_status" == ADVANCE_PAPER_VECTOR_EXTERNAL20 ]]'
+    )[1]
+    assert "deepjump-governance/external-panel-claims" in runner
+    assert 'EXTERNAL_DATA_ROOT=/data/mdcath_paper_vector_external20_seed20260723' in runner
+    assert "EXTERNAL_DATA_ROOT=${" not in runner
+    assert '[[ ! -e "$EXTERNAL_DATA_ROOT" ]]' in external_branch
+    assert "CLAIMED_FOR_SINGLE_USE" in external_branch
+    assert "scripts/claim_external_panel.py" in external_branch
+    assert "AppendObject" not in runner
+    assert "scripts/write_external_download_manifest.py" in external_branch
+    assert "--external-claim-sha256" in external_branch
+    assert "--external-download-manifest-sha256" in external_branch
+    assert "--source-proof-sha256" in external_branch
+    assert "--panel-kind paper-vector-external" in external_branch
+    assert "--baseline-checkpoint-sha256" in external_branch
+    assert "--candidate-checkpoint-sha256" in external_branch
+    assert "scripts/train_ddp.py" not in external_branch
+    assert 'verify_readback "$READBACK_ONE"' in runner
+    assert 'verify_readback "$READBACK_TWO"' in runner
+    assert '"$target/audit/audit_sha256.txt"' not in runner
+    assert "readback_manifests.sha256" in runner
+    assert '--root "$target" --phase initial' in runner
+    assert 'verify_final_readback "$FINAL_READBACK_ONE"' in runner
+    assert 'verify_final_readback "$FINAL_READBACK_TWO"' in runner
+    assert "OBS_PRECOMPLETION_DOUBLE_READBACK_PASS" in runner
+    assert '"second_seed_authorized": False' in runner
+    assert '"untouched_confirmation_authorized": False' in runner
+    assert '"formal_training_authorized": False' in runner
+    assert "Paper-vector A/B complete; seed1/untouched/formal training was not started." in runner
+
+
 def test_paper_horizon_postrun_certifier_is_read_only_bounded_and_source_bound():
     runner = Path("cloud/huawei/certify_paper_horizon_postrun.sh").read_text()
     assert "HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-45}" in runner

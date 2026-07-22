@@ -37,6 +37,8 @@ from scripts.external_endpoint_identity import (
     verify_guarded_training_prerequisite,
     verify_multidomain_checkpoint,
     verify_paper_horizon_ab_prerequisite,
+    verify_paper_vector_ab_prerequisite,
+    verify_paper_vector_external_evidence,
     verify_training_fingerprint,
 )
 from scripts.external_endpoint_root_cause import _batch, _cell_tensors
@@ -46,6 +48,9 @@ SCOPE = "conditional_reject_to_source_training_dev20_v1"
 EXTERNAL_SCOPE = "conditional_reject_to_source_fresh_external_dev20_v1"
 PAPER_HORIZON_EXTERNAL_SCOPE = (
     "conditional_reject_to_source_paper_horizon_external_dev20_v1"
+)
+PAPER_VECTOR_EXTERNAL_SCOPE = (
+    "conditional_reject_to_source_paper_vector_external_dev20_v1"
 )
 EXPECTED_CHECKPOINT_SHA256 = (
     "f3b5965303794e14059f2b67b6b81a538fadb1303c44e1d7c640af44ea690222"
@@ -82,10 +87,12 @@ MAX_FALLBACK_CELLS = 1
 FROZEN_BASELINE_PROFILE = "frozen-baseline"
 HORIZON_AB_BASELINE_PROFILE = "paper-horizon-ab-baseline1000"
 PAPER_HORIZON_PROFILE = "paper-horizon-500k"
+PAPER_VECTOR_PROFILE = "paper-horizon-vector-only-500k"
 CHECKPOINT_PROFILES = (
     FROZEN_BASELINE_PROFILE,
     HORIZON_AB_BASELINE_PROFILE,
     PAPER_HORIZON_PROFILE,
+    PAPER_VECTOR_PROFILE,
 )
 
 _PAPER_HORIZON_DATA_CONFIG = {
@@ -161,24 +168,36 @@ def checkpoint_profile_requirements(
         if checkpoint_sha256 != EXPECTED_CHECKPOINT_SHA256:
             raise ValueError("checkpoint is not the frozen full-tensor step2000 artifact")
         return None, None, None
-    if profile not in {HORIZON_AB_BASELINE_PROFILE, PAPER_HORIZON_PROFILE}:
+    if profile not in {
+        HORIZON_AB_BASELINE_PROFILE,
+        PAPER_HORIZON_PROFILE,
+        PAPER_VECTOR_PROFILE,
+    }:
         raise ValueError("unknown checkpoint profile")
     if len(checkpoint_sha256) != 64 or any(
         char not in "0123456789abcdef" for char in checkpoint_sha256
     ):
         raise ValueError("checkpoint SHA256 must be 64 lowercase hex characters")
     horizon = 1000 if profile == HORIZON_AB_BASELINE_PROFILE else 500000
-    out_dir = (
-        "runs/v100_tensorcloud01_full_d1_fp32_horizon_ab_baseline2000"
-        if profile == HORIZON_AB_BASELINE_PROFILE
-        else "runs/v100_tensorcloud01_full_d1_fp32_paper_horizon500k_2000"
+    if profile == HORIZON_AB_BASELINE_PROFILE:
+        out_dir = "runs/v100_tensorcloud01_full_d1_fp32_horizon_ab_baseline2000"
+    elif profile == PAPER_HORIZON_PROFILE:
+        out_dir = "runs/v100_tensorcloud01_full_d1_fp32_paper_horizon500k_2000"
+    else:
+        out_dir = (
+            "runs/v100_tensorcloud01_vector_only_d1_fp32_"
+            "paper_horizon500k_2000"
+        )
+    model = dict(_PAPER_HORIZON_MODEL_CONFIG)
+    model["tensor_cloud01_vector_only_attention"] = (
+        profile == PAPER_VECTOR_PROFILE
     )
     train = {
         **_PAPER_HORIZON_TRAIN_CONFIG,
         "lr_horizon_steps": horizon,
         "out_dir": out_dir,
     }
-    return _PAPER_HORIZON_DATA_CONFIG, _PAPER_HORIZON_MODEL_CONFIG, train
+    return _PAPER_HORIZON_DATA_CONFIG, model, train
 
 
 def _finite_or_none(value: float) -> float | None:
@@ -457,7 +476,12 @@ def main() -> None:
     parser.add_argument("--domain-list-sha256", required=True)
     parser.add_argument(
         "--panel-kind",
-        choices=("training", "fresh-external", "paper-horizon-external"),
+        choices=(
+            "training",
+            "fresh-external",
+            "paper-horizon-external",
+            "paper-vector-external",
+        ),
         default="training",
     )
     parser.add_argument("--panel-data-root")
@@ -469,7 +493,14 @@ def main() -> None:
     parser.add_argument("--untouched-domain-list-sha256")
     parser.add_argument("--prerequisite-decision")
     parser.add_argument("--prerequisite-decision-sha256")
+    parser.add_argument("--baseline-checkpoint-sha256")
     parser.add_argument("--candidate-checkpoint-sha256")
+    parser.add_argument("--external-claim")
+    parser.add_argument("--external-claim-sha256")
+    parser.add_argument("--external-download-manifest")
+    parser.add_argument("--external-download-manifest-sha256")
+    parser.add_argument("--source-proof")
+    parser.add_argument("--source-proof-sha256")
     parser.add_argument("--runtime-probe-output", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -486,12 +517,17 @@ def main() -> None:
         HORIZON_AB_BASELINE_PROFILE, PAPER_HORIZON_PROFILE
     }:
         parser.error("paper-horizon external requires a matched A/B checkpoint profile")
+    if args.panel_kind == "paper-vector-external" and args.checkpoint_profile not in {
+        PAPER_HORIZON_PROFILE, PAPER_VECTOR_PROFILE
+    }:
+        parser.error("paper-vector external requires a matched A/B checkpoint profile")
     if args.training_domain_list_sha256 != EXPECTED_TRAINING_SHA256:
         parser.error("training subset identity mismatch")
     expected_panel_sha = {
         "training": EXPECTED_PANEL_SHA256,
         "fresh-external": EXPECTED_EXTERNAL_PANEL_SHA256,
         "paper-horizon-external": EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256,
+        "paper-vector-external": EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256,
     }[args.panel_kind]
     if args.domain_list_sha256 != expected_panel_sha:
         parser.error(f"{args.panel_kind} panel identity mismatch")
@@ -507,6 +543,7 @@ def main() -> None:
         args.training_domain_list, args.training_domain_list_sha256
     )
     prerequisite = None
+    external_evidence = None
     panel_contract = None
     if args.panel_kind == "fresh-external":
         required = {
@@ -541,7 +578,7 @@ def main() -> None:
             expected_checkpoint_sha256=EXPECTED_CHECKPOINT_SHA256,
             expected_training_sha256=EXPECTED_TRAINING_SHA256,
         )
-    elif args.panel_kind == "paper-horizon-external":
+    elif args.panel_kind in {"paper-horizon-external", "paper-vector-external"}:
         required = {
             "prior external list": args.prior_external_domain_list,
             "prior external SHA256": args.prior_external_domain_list_sha256,
@@ -551,12 +588,40 @@ def main() -> None:
             "untouched SHA256": args.untouched_domain_list_sha256,
             "A/B prerequisite decision": args.prerequisite_decision,
             "A/B prerequisite decision SHA256": args.prerequisite_decision_sha256,
+            "baseline checkpoint SHA256": (
+                args.baseline_checkpoint_sha256
+                if args.panel_kind == "paper-vector-external" else True
+            ),
             "candidate checkpoint SHA256": args.candidate_checkpoint_sha256,
+            "external claim": (
+                args.external_claim
+                if args.panel_kind == "paper-vector-external" else True
+            ),
+            "external claim SHA256": (
+                args.external_claim_sha256
+                if args.panel_kind == "paper-vector-external" else True
+            ),
+            "external download manifest": (
+                args.external_download_manifest
+                if args.panel_kind == "paper-vector-external" else True
+            ),
+            "external download manifest SHA256": (
+                args.external_download_manifest_sha256
+                if args.panel_kind == "paper-vector-external" else True
+            ),
+            "source proof": (
+                args.source_proof
+                if args.panel_kind == "paper-vector-external" else True
+            ),
+            "source proof SHA256": (
+                args.source_proof_sha256
+                if args.panel_kind == "paper-vector-external" else True
+            ),
             "panel data root": args.panel_data_root,
         }
         missing = [label for label, value in required.items() if not value]
         if missing:
-            parser.error(f"paper-horizon external panel is missing: {', '.join(missing)}")
+            parser.error(f"{args.panel_kind} panel is missing: {', '.join(missing)}")
         if args.prior_external_domain_list_sha256 != EXPECTED_PRIOR_EXTERNAL_SHA256:
             parser.error("prior external panel identity mismatch")
         if args.prior_fresh_external_domain_list_sha256 != EXPECTED_EXTERNAL_PANEL_SHA256:
@@ -573,13 +638,48 @@ def main() -> None:
         )
         panel_ids = panel_contract["paper_horizon_external"]["ids"]
         panel_sha = panel_contract["paper_horizon_external"]["sha256"]
-        prerequisite = verify_paper_horizon_ab_prerequisite(
-            args.prerequisite_decision,
-            args.prerequisite_decision_sha256,
-            expected_candidate_checkpoint_sha256=args.candidate_checkpoint_sha256,
-            expected_training_sha256=EXPECTED_TRAINING_SHA256,
-            expected_training_panel_sha256=EXPECTED_PANEL_SHA256,
-        )
+        if args.panel_kind == "paper-horizon-external":
+            prerequisite = verify_paper_horizon_ab_prerequisite(
+                args.prerequisite_decision,
+                args.prerequisite_decision_sha256,
+                expected_candidate_checkpoint_sha256=(
+                    args.candidate_checkpoint_sha256
+                ),
+                expected_training_sha256=EXPECTED_TRAINING_SHA256,
+                expected_training_panel_sha256=EXPECTED_PANEL_SHA256,
+            )
+        else:
+            prerequisite = verify_paper_vector_ab_prerequisite(
+                args.prerequisite_decision,
+                args.prerequisite_decision_sha256,
+                expected_baseline_checkpoint_sha256=(
+                    args.baseline_checkpoint_sha256
+                ),
+                expected_candidate_checkpoint_sha256=(
+                    args.candidate_checkpoint_sha256
+                ),
+                expected_training_sha256=EXPECTED_TRAINING_SHA256,
+                expected_training_panel_sha256=EXPECTED_PANEL_SHA256,
+            )
+            external_evidence = verify_paper_vector_external_evidence(
+                args.external_claim,
+                args.external_claim_sha256,
+                args.external_download_manifest,
+                args.external_download_manifest_sha256,
+                expected_panel_sha256=panel_sha,
+                expected_prerequisite_decision_sha256=(
+                    args.prerequisite_decision_sha256
+                ),
+                expected_baseline_checkpoint_sha256=(
+                    args.baseline_checkpoint_sha256
+                ),
+                expected_candidate_checkpoint_sha256=(
+                    args.candidate_checkpoint_sha256
+                ),
+                source_proof_path=args.source_proof,
+                expected_source_proof_sha256=args.source_proof_sha256,
+                panel_data_root=args.panel_data_root,
+            )
     else:
         panel_ids, panel_sha = load_frozen_domain_ids(
             args.domain_list, args.domain_list_sha256
@@ -609,7 +709,7 @@ def main() -> None:
     if args.panel_kind == "fresh-external" and panel_total_bytes != EXPECTED_EXTERNAL_BYTES:
         raise ValueError("fresh external panel byte count mismatch")
     if (
-        args.panel_kind == "paper-horizon-external"
+        args.panel_kind in {"paper-horizon-external", "paper-vector-external"}
         and panel_total_bytes != EXPECTED_PAPER_HORIZON_EXTERNAL_BYTES
     ):
         raise ValueError("paper-horizon external panel byte count mismatch")
@@ -735,6 +835,7 @@ def main() -> None:
             "training": SCOPE,
             "fresh-external": EXTERNAL_SCOPE,
             "paper-horizon-external": PAPER_HORIZON_EXTERNAL_SCOPE,
+            "paper-vector-external": PAPER_VECTOR_EXTERNAL_SCOPE,
         }[args.panel_kind],
         "checkpoint": str(Path(args.ckpt).resolve()),
         "checkpoint_sha256": args.checkpoint_sha256,
@@ -772,9 +873,12 @@ def main() -> None:
             "ids": panel_ids,
             "subset_of_training1000": args.panel_kind == "training",
             "fresh_external": args.panel_kind in {
-                "fresh-external", "paper-horizon-external"
+                "fresh-external", "paper-horizon-external", "paper-vector-external"
             },
-            "paper_horizon_external": args.panel_kind == "paper-horizon-external",
+            "paper_horizon_external": args.panel_kind in {
+                "paper-horizon-external", "paper-vector-external"
+            },
+            "paper_vector_external": args.panel_kind == "paper-vector-external",
             "exclusion_union_count": (
                 panel_contract["exclusion_union_count"] if panel_contract else None
             ),
@@ -782,6 +886,7 @@ def main() -> None:
             "total_bytes": panel_total_bytes,
         },
         "prerequisite": prerequisite,
+        "external_evidence": external_evidence,
         "grid": {"temperatures": temperatures, "replicas": replicas},
         "mechanism_probe": mechanism,
         "runtime_probe": runtime_probe,

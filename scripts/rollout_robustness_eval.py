@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 from pathlib import Path
 
@@ -125,6 +127,7 @@ def one_step_persistence_trajectory(
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--checkpoint-sha256")
     ap.add_argument("--domain-list", required=True)
     ap.add_argument("--domain-list-sha256", required=True)
     ap.add_argument("--domains", type=int, default=5)
@@ -152,6 +155,15 @@ def main() -> None:
     args = ap.parse_args()
     if args.noise_sigma is not None and args.noise_sigma < 0:
         ap.error("--noise-sigma must be non-negative")
+    checkpoint_sha256 = hashlib.sha256(Path(args.ckpt).read_bytes()).hexdigest()
+    if args.checkpoint_sha256 is not None:
+        expected = args.checkpoint_sha256
+        if len(expected) != 64 or any(
+            char not in "0123456789abcdef" for char in expected
+        ):
+            ap.error("--checkpoint-sha256 must be 64 lowercase hex characters")
+        if not hmac.compare_digest(checkpoint_sha256, expected):
+            raise ValueError("checkpoint SHA256 mismatch")
 
     ck = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cm, cd = ck["cfg"]["model"], ck["cfg"]["data"]
@@ -281,6 +293,7 @@ def main() -> None:
         methods.append("teacher_forced_mean")
     result = {
         "checkpoint": args.ckpt,
+        "checkpoint_sha256": checkpoint_sha256,
         "checkpoint_step": ck["step"],
         "settings": vars(args),
         "preprocessing": {

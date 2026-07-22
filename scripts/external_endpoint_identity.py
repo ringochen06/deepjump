@@ -85,9 +85,22 @@ def verify_multidomain_checkpoint(
                 raise ValueError(f"checkpoint data.{key} mismatch")
     if model_cfg.get("tensor_cloud01") is not True:
         raise ValueError("checkpoint is not TensorCloud01")
-    if model_cfg.get("tensor_cloud01_vector_only_attention", False) is not False:
-        raise ValueError("checkpoint is not the full-tensor candidate")
-    if expected_model_config is not None:
+    if expected_model_config is None:
+        if model_cfg.get("tensor_cloud01_vector_only_attention", False) is not False:
+            raise ValueError("checkpoint is not the full-tensor candidate")
+    else:
+        expected_vector_only = expected_model_config.get(
+            "tensor_cloud01_vector_only_attention"
+        )
+        if type(expected_vector_only) is not bool or type(
+            model_cfg.get("tensor_cloud01_vector_only_attention")
+        ) is not bool:
+            raise ValueError("checkpoint vector-only architecture flag is not boolean")
+        if (
+            model_cfg.get("tensor_cloud01_vector_only_attention")
+            is not expected_vector_only
+        ):
+            raise ValueError("checkpoint vector-only architecture flag mismatch")
         for key, expected in expected_model_config.items():
             if model_cfg.get(key) != expected:
                 raise ValueError(f"checkpoint model.{key} mismatch")
@@ -251,6 +264,207 @@ def verify_paper_horizon_ab_prerequisite(
         ):
             raise ValueError(f"A/B prerequisite mismatch: {key}")
     return {"sha256": actual_sha256, "status": decision["status"]}
+
+
+def verify_paper_vector_ab_prerequisite(
+    decision_path: str | Path,
+    expected_sha256: str,
+    *,
+    expected_baseline_checkpoint_sha256: str,
+    expected_candidate_checkpoint_sha256: str,
+    expected_training_sha256: str,
+    expected_training_panel_sha256: str,
+) -> dict:
+    """Bind external evaluation to the exact successful paper-vector A/B."""
+    expected_sha256 = _require_digest(
+        expected_sha256, label="paper-vector A/B decision SHA256"
+    )
+    actual_sha256 = _sha256(decision_path)
+    if not hmac.compare_digest(actual_sha256, expected_sha256):
+        raise ValueError("paper-vector A/B prerequisite decision SHA256 mismatch")
+    decision = json.loads(Path(decision_path).read_text())
+    expected = {
+        "status": "ADVANCE_PAPER_VECTOR_EXTERNAL20",
+        "scope": (
+            "matched_fresh_continuous_0_to_2000_"
+            "paper_vector_attention_training_dev_ab"
+        ),
+        "panel_kind": "training",
+        "baseline_checkpoint_sha256": expected_baseline_checkpoint_sha256,
+        "candidate_checkpoint_sha256": expected_candidate_checkpoint_sha256,
+        "training_domain_list_sha256": expected_training_sha256,
+        "domain_list_sha256": expected_training_panel_sha256,
+        "baseline_reproduced": True,
+        "candidate_absolute_pass": True,
+        "paired_pass": True,
+        "external_development_authorized": True,
+        "second_seed_authorized": False,
+        "untouched_confirmation_authorized": False,
+        "formal_training_authorized": False,
+    }
+    for key, value in expected.items():
+        actual = decision.get(key)
+        if actual != value or (isinstance(value, bool) and type(actual) is not bool):
+            raise ValueError(f"paper-vector A/B prerequisite mismatch: {key}")
+    objective = decision.get("objective")
+    if not isinstance(objective, dict):
+        raise ValueError("paper-vector A/B prerequisite objective is missing")
+    if objective.get("required_candidate_factor") != 0.995:
+        raise ValueError("paper-vector A/B prerequisite objective factor mismatch")
+    if type(objective.get("passes")) is not bool or objective.get("passes") is not True:
+        raise ValueError("paper-vector A/B prerequisite objective did not pass")
+    h20 = decision.get("candidate_h20_gate")
+    if not isinstance(h20, dict):
+        raise ValueError("paper-vector A/B prerequisite H20 gate is missing")
+    if type(h20.get("passes")) is not bool or h20.get("passes") is not True:
+        raise ValueError("paper-vector A/B prerequisite H20 gate did not pass")
+    return {
+        "sha256": actual_sha256,
+        "status": decision["status"],
+        "baseline_checkpoint_sha256": decision["baseline_checkpoint_sha256"],
+        "candidate_checkpoint_sha256": decision["candidate_checkpoint_sha256"],
+    }
+
+
+def verify_paper_vector_external_evidence(
+    claim_path: str | Path,
+    expected_claim_sha256: str,
+    manifest_path: str | Path,
+    expected_manifest_sha256: str,
+    *,
+    expected_panel_sha256: str,
+    expected_prerequisite_decision_sha256: str,
+    expected_baseline_checkpoint_sha256: str,
+    expected_candidate_checkpoint_sha256: str,
+    source_proof_path: str | Path,
+    expected_source_proof_sha256: str,
+    panel_data_root: str | Path | None = None,
+) -> dict:
+    """Bind a paper-vector external evaluation to its one-shot claim and HDF5s."""
+    claim_sha = _require_digest(expected_claim_sha256, label="external claim SHA256")
+    manifest_sha = _require_digest(
+        expected_manifest_sha256, label="external download manifest SHA256"
+    )
+    source_proof_sha = _require_digest(
+        expected_source_proof_sha256, label="source proof SHA256"
+    )
+    if not hmac.compare_digest(_sha256(claim_path), claim_sha):
+        raise ValueError("external claim SHA256 mismatch")
+    if not hmac.compare_digest(_sha256(manifest_path), manifest_sha):
+        raise ValueError("external download manifest SHA256 mismatch")
+    if not hmac.compare_digest(_sha256(source_proof_path), source_proof_sha):
+        raise ValueError("source proof SHA256 mismatch")
+    source_proof = json.loads(Path(source_proof_path).read_text())
+    expected_source_proof = {
+        "schema": "deepjump.prior_source_control_flow_proof.v1",
+        "status": "PASS_PRIOR_AUTHORITATIVE_RUN_EXTERNAL_UNCONSUMED",
+        "source_run_id": "20260722T012922Z",
+        "source_commit": "dbbc86daa1bc7dd123d52924f7ab6eed21c96b9b",
+        "source_audit_obs_uri": (
+            "obs://deepjump-mdcath-cn4-ringochen/deepjump-calibration/"
+            "paper-horizon-ab2000/20260722T012922Z/audit"
+        ),
+        "source_decision_sha256": (
+            "2367d8d29fc02e9a53ec8672b6cb4e2ef9f06ef9ae265f2cffd9f905dcd91d38"
+        ),
+        "source_runner_sha256": (
+            "2c8eedad191a814080303b6a30204fbb9bee522937c3a0cb5087e3439b6bd75f"
+        ),
+        "source_status": "STOP_PAPER_HORIZON_OBJECTIVE_GAIN",
+        "required_advance_status": "ADVANCE_PAPER_HORIZON_EXTERNAL20",
+        "proof_basis": "fixed_decision_and_fixed_runner_control_flow",
+        "prior_authoritative_run_consumed": False,
+    }
+    if not isinstance(source_proof, dict) or source_proof != expected_source_proof:
+        raise ValueError("source proof exact schema or fixed evidence mismatch")
+    claim = json.loads(Path(claim_path).read_text())
+    expected_claim = {
+        "schema": "deepjump.external_panel_claim.v1",
+        "status": "CLAIMED_FOR_SINGLE_USE",
+        "panel_sha256": expected_panel_sha256,
+        "panel_count": 20,
+        "expected_total_bytes": 14236836972,
+        "source_stop_decision_sha256": (
+            "2367d8d29fc02e9a53ec8672b6cb4e2ef9f06ef9ae265f2cffd9f905dcd91d38"
+        ),
+        "source_proof_sha256": source_proof_sha,
+        "training_ab_decision_sha256": expected_prerequisite_decision_sha256,
+        "baseline_checkpoint_sha256": expected_baseline_checkpoint_sha256,
+        "candidate_checkpoint_sha256": expected_candidate_checkpoint_sha256,
+        "prior_authoritative_run_consumed": False,
+    }
+    if not isinstance(claim, dict) or set(claim) != {
+        *expected_claim,
+        "run_id",
+        "commit",
+        "claimed_at",
+    }:
+        raise ValueError("external claim exact schema mismatch")
+    for key, expected in expected_claim.items():
+        actual = claim.get(key)
+        if actual != expected or (isinstance(expected, bool) and type(actual) is not bool):
+            raise ValueError(f"external claim mismatch: {key}")
+    manifest = json.loads(Path(manifest_path).read_text())
+    expected_manifest_keys = {
+        "schema", "status", "panel_sha256", "claim_sha256", "run_id",
+        "commit", "root", "files_count", "total_bytes", "trajectories",
+        "unresolved_failures", "inventory_sha256", "files",
+    }
+    if not isinstance(manifest, dict) or set(manifest) != expected_manifest_keys:
+        raise ValueError("external download manifest exact schema mismatch")
+    checks = {
+        "schema": "deepjump.external_download_inventory.v1",
+        "status": "PASS",
+        "panel_sha256": expected_panel_sha256,
+        "claim_sha256": claim_sha,
+        "run_id": claim.get("run_id"),
+        "commit": claim.get("commit"),
+        "files_count": 20,
+        "total_bytes": 14236836972,
+        "trajectories": 500,
+        "unresolved_failures": 0,
+    }
+    for key, expected in checks.items():
+        if manifest.get(key) != expected:
+            raise ValueError(f"external download manifest mismatch: {key}")
+    files = manifest.get("files")
+    if not isinstance(files, list) or len(files) != 20:
+        raise ValueError("external download manifest must contain 20 files")
+    file_keys = {
+        "domain", "relative_path", "bytes", "sha256", "residues",
+        "trajectories", "min_frames",
+    }
+    if any(not isinstance(row, dict) or set(row) != file_keys for row in files):
+        raise ValueError("external download manifest file schema mismatch")
+    encoded = json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
+    if hashlib.sha256(encoded).hexdigest() != manifest.get("inventory_sha256"):
+        raise ValueError("external download inventory SHA256 mismatch")
+    if panel_data_root is not None:
+        root = Path(panel_data_root).resolve()
+        if manifest.get("root") != str(root):
+            raise ValueError("external download root mismatch")
+        expected_paths = set()
+        for row in files:
+            relative = Path(row["relative_path"])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("unsafe external manifest path")
+            path = root / relative
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("external manifest file missing or symlink")
+            if path.stat().st_size != row["bytes"] or _sha256(path) != row["sha256"]:
+                raise ValueError("external manifest file identity mismatch")
+            expected_paths.add(path.resolve())
+        if set(path.resolve() for path in root.rglob("*.h5")) != expected_paths:
+            raise ValueError("external manifest HDF5 exact inventory mismatch")
+    return {
+        "claim_sha256": claim_sha,
+        "download_manifest_sha256": manifest_sha,
+        "inventory_sha256": manifest["inventory_sha256"],
+        "source_proof_sha256": source_proof_sha,
+        "panel_sha256": expected_panel_sha256,
+        "run_id": claim["run_id"],
+        "commit": claim["commit"],
+    }
 
 
 def verify_guarded_training_prerequisite(
