@@ -943,3 +943,30 @@ def test_heldout_endpoint_grid_runner_is_preregistered_bounded_and_inference_onl
     assert '"status":"OBS_READBACK_PASS"' in runner
     assert "readback_completion.sha256" in runner
     assert "training was not started" in runner
+
+
+def test_teacher_update_projection_runner_is_bounded_bound_and_inference_only():
+    runner = Path(
+        "cloud/huawei/run_teacher_update_projection_discriminator.sh"
+    ).read_text()
+    assert 'export PYTHONPATH="$REPO:$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-45}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 45 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
+    assert 'sudo -n shutdown -h now || shutdown_code=$?' in runner
+    assert "fc5f1e7b5188af4911e518ac0e3d44c2aba4a22431360bde704465c9c1889a73" in runner
+    assert "bacf07bdd93119a0b793b67335a520c468c5749d5d9da71d887d5a5fe8aa7753" in runner
+    assert "03a953b4bda5e45391f7a06311eceeb84485a1a4b4a54f01edcd8aa7aea2609d" in runner
+    assert "70a84d0e6e1bb4491ce51d89bcaf7fccab090ded2dc0415a267792e659794512" in runner
+    assert 'for path in "$RUN_DIR" "$RUNNER_LOG"' in runner
+    assert "scripts/teacher_update_projection_eval.py" in runner
+    assert "--domains 3 --starts 2 --steps 20 --calibration-domain 1gxlA02" in runner
+    assert '"$PYTHON" -m scripts.adjudicate_teacher_update_projection' in runner
+    assert "scripts/train_ddp.py" not in runner
+    assert "torchrun" not in runner.lower()
+    assert '"formal_training_authorized": False' in runner
+    assert runner.count("verify_teacher_update_projection_readback.py") >= 2
+    assert "training was not started" in runner
