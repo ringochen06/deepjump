@@ -1,0 +1,20 @@
+{
+  "strategy": "length-proportional",
+  "seed": 20260721,
+  "n": 20,
+  "subset_sha256": "9fb229049aec41ac9b376b447938930e434c94b7e106dfe5dc1ae1ac8cdaf245",
+  "exclude_domains_file": "configs/subset_1000_length_proportional.txt",
+  "exclude_count": 1000,
+  "source_repo": "compsciencelab/mdCATH",
+  "expected_bytes": 13778143616,
+  "length_band_quotas": [
+    2,
+    5,
+    4,
+    3,
+    2,
+    1,
+    1,
+    2
+  ]
+}

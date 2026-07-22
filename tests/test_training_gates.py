@@ -282,6 +282,58 @@ def test_tensorcloud01_calibration_runner_is_bounded_and_delta_scoped():
     assert "vector-only calibration is frozen to delta=1" in runner
 
 
+def test_dev20_endpoint_runner_is_evaluation_only_bounded_and_readback_closed():
+    runner = Path("cloud/huawei/run_twenty_domain_endpoint_gate.sh").read_text()
+
+    assert 'export PYTHONPATH="$REPO:$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-75}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 75 ]]' in runner
+    assert runner.index("systemd-run") < runner.index("nvidia-smi")
+    assert "scripts/endpoint_panel_eval.py" in runner
+    assert "--starts 3" in runner
+    assert '--runtime-probe-output "$RUN_DIR/runtime_probe.json"' in runner
+    assert "runtime_probe.json panel.json panel.log" in runner
+    assert "scripts.adjudicate_endpoint_panel" in runner
+    assert "tests/test_endpoint_panel_adjudication.py" in runner
+    assert "configs/dev_20_length_proportional_seed0.txt" in runner
+    assert "4fd7015951fc48598d7beb888670d701b39697cdf62c2982a95b2b7b243474af" in runner
+    assert "train_ddp.py" not in runner
+    assert "scripts/train.py" not in runner
+    assert 'second_seed_authorized":false' in runner
+    assert 'formal_training_authorized":false' in runner
+    assert "sha256sum -c \"$RUN_DIR/audit_sha256.txt\"" in runner
+    assert "readback_completion.sha256" in runner
+    assert "sudo -n shutdown -h now" in runner
+
+
+def test_external_dev20_runner_is_disjoint_evaluation_only_and_fail_closed():
+    runner = Path("cloud/huawei/run_external_dev20_endpoint_gate.sh").read_text()
+
+    assert 'export PYTHONPATH="$REPO:$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-120}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 120 ]]' in runner
+    assert runner.index("systemd-run") < runner.index("nvidia-smi")
+    assert "scripts/external_endpoint_panel_eval.py" in runner
+    assert "scripts.adjudicate_external_endpoint_panel" in runner
+    assert "configs/subset_1000_length_proportional.txt" in runner
+    assert "configs/external_dev_20_length_proportional_seed20260721.txt" in runner
+    assert "39278d6dc3de52065b19dffb2438eae53fca3730572bba30496c1b116d597734" in runner
+    assert "9fb229049aec41ac9b376b447938930e434c94b7e106dfe5dc1ae1ac8cdaf245" in runner
+    assert "13778143616" in runner
+    assert "--expected-h5 1000" in runner
+    assert "scripts/download_mdcath.py" in runner
+    assert "scripts/audit_external_mdcath.py" in runner
+    assert "download.log" in runner
+    assert "tests/test_external_endpoint_panel_adjudication.py" in runner
+    assert "train_ddp.py" not in runner
+    assert "scripts/train.py" not in runner
+    assert 'formal_training_authorized": False' in runner
+    assert 'second_seed_authorized": bool(decision["second_seed_authorized"])' in runner
+    assert "sha256sum -c \"$RUN_DIR/audit_sha256.txt\"" in runner
+    assert "readback_completion.sha256" in runner
+    assert "sudo -n shutdown -h now" in runner
+
+
 def test_vector_only_numerics_discriminator_is_bounded_and_two_arm_scoped():
     runner = Path("cloud/huawei/run_vector_only_step221_discriminator.sh").read_text()
     assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
@@ -478,4 +530,89 @@ def test_v_mask_projection_runner_is_bounded_conditional_and_inference_only():
     assert "scripts/train_ddp.py" not in runner
     assert "torchrun" not in runner.lower()
     assert 'sha256sum -c "$RUN_DIR/audit_sha256.txt"' in runner
+    assert "training was not started" in runner
+
+
+def test_ode_step_scan_runner_is_paired_bounded_and_inference_only():
+    runner = Path("cloud/huawei/run_ode_step_scan.sh").read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-45}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 45 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
+    assert 'sudo -n shutdown -h now || shutdown_code=$?' in runner
+    assert 'REFERENCE_ODE150=${REFERENCE_ODE150:?' in runner
+    assert 'REFERENCE_ODE150_SHA256=${REFERENCE_ODE150_SHA256:?' in runner
+    assert 'METHODS=(mean ode_1 ode_2 ode_5 ode_10 ode_20 ode_40 ode_75 ode_150)' in runner
+    assert '--domains 1 --starts 5 --steps 1 --methods "$method"' in runner
+    assert '--seed 20260718 --integrator euler --tau-max 1.0 --drift-anchor state' in runner
+    assert '"$PYTHON" -m scripts.adjudicate_ode_step_scan' in runner
+    assert '"twenty_domain_authorized":false' in runner
+    assert '"second_seed_authorized":false' in runner
+    assert '"confirmation_authorized":false' in runner
+    assert '"formal_training_authorized":false' in runner
+    assert "scripts/train_ddp.py" not in runner
+    assert "torchrun" not in runner.lower()
+    assert 'sha256sum -c "$RUN_DIR/audit_sha256.txt"' in runner
+    assert "training was not started" in runner
+
+
+def test_endpoint_grid_runner_is_full_grid_bounded_and_inference_only():
+    runner = Path("cloud/huawei/run_endpoint_grid_discriminator.sh").read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-45}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 45 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
+    assert 'sudo -n shutdown -h now || shutdown_code=$?' in runner
+    assert 'CHECKPOINT=${CHECKPOINT:?set the existing source-law ckpt_1000.pt path}' in runner
+    assert 'CHECKPOINT_SHA256=${CHECKPOINT_SHA256:?set the frozen checkpoint SHA256}' in runner
+    assert "_verify_checkpoint_source_law" in runner
+    assert "scripts/endpoint_grid_eval.py" in runner
+    assert '--checkpoint-sha256 "$CHECKPOINT_SHA256"' in runner
+    assert '--starts 5 --output "$RUN_DIR/grid.json"' in runner
+    assert '"$PYTHON" -m scripts.adjudicate_endpoint_grid' in runner
+    assert '"twenty_domain_authorized":false' in runner
+    assert '"second_seed_authorized":false' in runner
+    assert '"confirmation_authorized":false' in runner
+    assert '"formal_training_authorized":false' in runner
+    assert "scripts/train_ddp.py" not in runner
+    assert "torchrun" not in runner.lower()
+    assert 'sha256sum -c "$RUN_DIR/audit_sha256.txt"' in runner
+    assert "training was not started" in runner
+
+
+def test_heldout_endpoint_grid_runner_is_preregistered_bounded_and_inference_only():
+    runner = Path("cloud/huawei/run_heldout_endpoint_grid_discriminator.sh").read_text()
+    assert 'export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"' in runner
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-45}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 45 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
+    assert 'sudo -n shutdown -h now || shutdown_code=$?' in runner
+    assert 'DOMAIN_LIST=configs/heldout_endpoint_domain_seed0.txt' in runner
+    assert (
+        'DOMAIN_LIST_SHA256=a3804fd4bb0fc09b32efd0de790b14862acece82c57a55860d5b6306f41ab61c'
+        in runner
+    )
+    assert "scripts/endpoint_grid_eval.py" in runner
+    assert 'assert d["domains"]==["1a0hA01"]' in runner
+    assert 'assert int(d["crop_length"])>=86' in runner
+    assert '"$PYTHON" -m scripts.adjudicate_heldout_endpoint_grid' in runner
+    assert '--starts 5 --output "$RUN_DIR/grid.json"' in runner
+    assert '"twenty_domain_authorized":false' in runner
+    assert '"second_seed_authorized":false' in runner
+    assert '"confirmation_authorized":false' in runner
+    assert '"formal_training_authorized":false' in runner
+    assert "scripts/train_ddp.py" not in runner
+    assert "torchrun" not in runner.lower()
+    assert 'sha256sum -c "$RUN_DIR/audit_sha256.txt"' in runner
+    assert '"status":"OBS_READBACK_PASS"' in runner
+    assert "readback_completion.sha256" in runner
     assert "training was not started" in runner
