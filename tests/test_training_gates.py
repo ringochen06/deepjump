@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import torch
+import pytest
 
 from scripts.train import fast_dev_gate_errors
 from deepjump.config import load_config
@@ -58,6 +59,75 @@ def test_lr_horizon_preserves_reference_schedule_for_bounded_probe():
     assert fp32.train.lr_horizon_steps == fp16.train.lr_horizon_steps == 1000
     assert not fp32.train.amp
     assert fp16.train.amp and fp16.train.amp_dtype == "fp16"
+
+
+def test_paper_horizon_ab_freezes_expected_lr_trajectories():
+    baseline = load_config(
+        "configs/v100_tensorcloud01_full_d1_fp32_horizon_ab_baseline2000.yaml"
+    )
+    candidate = load_config(
+        "configs/v100_tensorcloud01_full_d1_fp32_paper_horizon500k_2000.yaml"
+    )
+    assert [lr_at(step, baseline) for step in (0, 199, 200, 1000, 1999)] == pytest.approx(
+        [2.5e-5, 5.0e-3, 5.0e-3, 3.0e-3, 3.0e-3]
+    )
+    assert [lr_at(step, candidate) for step in (0, 199, 200, 1000, 1999)] == pytest.approx(
+        [
+            2.5e-5,
+            5.0e-3,
+            5.0e-3,
+            0.004996798719487795,
+            0.004992801120448179,
+        ]
+    )
+
+
+def test_paper_horizon_ab_runner_is_matched_bounded_and_fail_closed():
+    runner = Path("cloud/huawei/run_paper_horizon_ab2000.sh").read_text()
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-600}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 600 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
+    assert "systemctl is-active" in runner
+    assert "/usr/bin/systemctl poweroff" in runner
+    assert '[[ -z "$(git status --porcelain)" ]]' in runner
+    assert "v100_tensorcloud01_full_d1_fp32_horizon_ab_baseline2000.yaml" in runner
+    assert "v100_tensorcloud01_full_d1_fp32_paper_horizon500k_2000.yaml" in runner
+    assert 'scripts/train_ddp.py --config "$config"' in runner
+    assert "--resume" not in runner
+    assert "--warm-start" not in runner
+    assert "run_arm baseline" in runner and "run_arm candidate" in runner
+    assert "paper-horizon-ab-baseline1000" in runner
+    assert "paper-horizon-500k" in runner
+    assert runner.count("scripts/guarded_endpoint_panel_eval.py") == 2
+    assert "run_panel baseline" in runner and "run_panel candidate" in runner
+    assert "scripts/adjudicate_paper_horizon_ab.py" in runner
+    assert 'verify_readback "$READBACK_ONE"' in runner
+    assert 'verify_readback "$READBACK_TWO"' in runner
+    assert "OBS_DOUBLE_READBACK_PASS" in runner
+    assert '"formal_training_authorized": False' in runner
+    assert '"second_seed_authorized": False' in runner
+    assert "second_seed_scientifically_eligible" in runner
+    assert '[[ "$BUCKET" == "obs://deepjump-mdcath-cn4-ringochen" ]]' in runner
+    assert "RUN_ID must be UTC basic timestamp" in runner
+    assert "refusing to reuse non-empty OBS evidence prefix" in runner
+    assert 'Object number\\s*(?:is)?\\s*:\\s*([0-9]+)' in runner
+    assert '"authorization_requires_independent_readback": True' in runner
+    assert "final_markers.sha256" in runner
+    assert '"$READBACK_TWO/audit/decision.json"' in runner
+    assert 'decision.get("status") == "PASS_PAPER_HORIZON_EXTERNAL20"' in runner
+    assert 'scientifically_eligible is True' in runner
+    assert "ADVANCE_PAPER_HORIZON_EXTERNAL20" in runner
+    assert "SKIPPED_PAPER_HORIZON_EXTERNAL20" in runner
+    assert "paper_horizon_external_dev_20_length_proportional_seed20260723.txt" in runner
+    assert "run_external_panel baseline" in runner
+    assert "run_external_panel candidate" in runner
+    assert "--panel-kind paper-horizon-external" in runner
+    assert "scripts/train_ddp.py" not in runner.split(
+        "if [[ \"$training_ab_status\" == ADVANCE_PAPER_HORIZON_EXTERNAL20 ]]"
+    )[1]
 
 
 def _write_checkpoint(

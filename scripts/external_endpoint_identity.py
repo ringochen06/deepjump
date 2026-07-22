@@ -8,6 +8,7 @@ import hmac
 import json
 import math
 from pathlib import Path
+from typing import Mapping
 
 import torch
 
@@ -45,6 +46,9 @@ def verify_multidomain_checkpoint(
     expected_sha256: str,
     *,
     expected_step: int = EXPECTED_CHECKPOINT_STEP,
+    expected_data_config: Mapping[str, object] | None = None,
+    expected_model_config: Mapping[str, object] | None = None,
+    expected_train_config: Mapping[str, object] | None = None,
 ) -> tuple[dict, str]:
     """Verify the frozen FP32 pilot checkpoint without trusting its filename."""
     actual_sha256 = _sha256(checkpoint_path)
@@ -75,12 +79,24 @@ def verify_multidomain_checkpoint(
     for key, expected in required_data.items():
         if data_cfg.get(key) != expected:
             raise ValueError(f"checkpoint data.{key} mismatch")
+    if expected_data_config is not None:
+        for key, expected in expected_data_config.items():
+            if data_cfg.get(key) != expected:
+                raise ValueError(f"checkpoint data.{key} mismatch")
     if model_cfg.get("tensor_cloud01") is not True:
         raise ValueError("checkpoint is not TensorCloud01")
     if model_cfg.get("tensor_cloud01_vector_only_attention", False) is not False:
         raise ValueError("checkpoint is not the full-tensor candidate")
+    if expected_model_config is not None:
+        for key, expected in expected_model_config.items():
+            if model_cfg.get(key) != expected:
+                raise ValueError(f"checkpoint model.{key} mismatch")
     if train_cfg.get("seed") != 0 or train_cfg.get("amp") is not False:
         raise ValueError("checkpoint is not the frozen seed-0 FP32 pilot")
+    if expected_train_config is not None:
+        for key, expected in expected_train_config.items():
+            if train_cfg.get(key) != expected:
+                raise ValueError(f"checkpoint train.{key} mismatch")
 
     train_state = checkpoint.get("train_state") or {}
     if train_state.get("world_size") != 8:
@@ -158,6 +174,83 @@ def load_fresh_external_panels(
     if overlap:
         raise ValueError(f"fresh external panel overlaps the frozen exclusion union: {overlap}")
     return {**loaded, "exclusion_union_count": len(excluded)}
+
+
+def load_paper_horizon_external_panels(
+    training_domain_list: str | Path,
+    training_domain_list_sha256: str,
+    prior_external_domain_list: str | Path,
+    prior_external_domain_list_sha256: str,
+    prior_fresh_external_domain_list: str | Path,
+    prior_fresh_external_domain_list_sha256: str,
+    untouched_domain_list: str | Path,
+    untouched_domain_list_sha256: str,
+    paper_horizon_domain_list: str | Path,
+    paper_horizon_domain_list_sha256: str,
+) -> dict[str, object]:
+    """Prove the paper-horizon external panel excludes all 1140 seen/reserved domains."""
+    specs = (
+        ("training", training_domain_list, training_domain_list_sha256, 1000),
+        ("prior_external", prior_external_domain_list, prior_external_domain_list_sha256, 20),
+        ("prior_fresh_external", prior_fresh_external_domain_list,
+         prior_fresh_external_domain_list_sha256, 20),
+        ("untouched", untouched_domain_list, untouched_domain_list_sha256, 100),
+        ("paper_horizon_external", paper_horizon_domain_list,
+         paper_horizon_domain_list_sha256, 20),
+    )
+    loaded: dict[str, dict[str, object]] = {}
+    for label, path, expected_sha256, expected_count in specs:
+        ids, actual_sha256 = load_frozen_domain_ids(path, expected_sha256)
+        if len(ids) != expected_count or len(set(ids)) != expected_count:
+            raise ValueError(f"{label} panel must contain exactly {expected_count} unique domains")
+        loaded[label] = {"ids": ids, "sha256": actual_sha256}
+    excluded = (
+        set(loaded["training"]["ids"])
+        | set(loaded["prior_external"]["ids"])
+        | set(loaded["prior_fresh_external"]["ids"])
+        | set(loaded["untouched"]["ids"])
+    )
+    if len(excluded) != 1140:
+        raise ValueError("paper-horizon exclusion panels are not mutually disjoint")
+    overlap = sorted(excluded & set(loaded["paper_horizon_external"]["ids"]))
+    if overlap:
+        raise ValueError(
+            "paper-horizon external panel overlaps the frozen exclusion union: "
+            f"{overlap}"
+        )
+    return {**loaded, "exclusion_union_count": len(excluded)}
+
+
+def verify_paper_horizon_ab_prerequisite(
+    decision_path: str | Path,
+    expected_sha256: str,
+    *,
+    expected_candidate_checkpoint_sha256: str,
+    expected_training_sha256: str,
+    expected_training_panel_sha256: str,
+) -> dict:
+    """Bind the external A/B to the exact successful training-dev A/B decision."""
+    expected_sha256 = _require_digest(expected_sha256, label="A/B decision SHA256")
+    actual_sha256 = _sha256(decision_path)
+    if not hmac.compare_digest(actual_sha256, expected_sha256):
+        raise ValueError("A/B prerequisite decision SHA256 mismatch")
+    decision = json.loads(Path(decision_path).read_text())
+    expected = {
+        "status": "ADVANCE_PAPER_HORIZON_EXTERNAL20",
+        "candidate_checkpoint_sha256": expected_candidate_checkpoint_sha256,
+        "training_domain_list_sha256": expected_training_sha256,
+        "domain_list_sha256": expected_training_panel_sha256,
+        "external_development_authorized": True,
+        "second_seed_authorized": False,
+        "untouched_confirmation_authorized": False,
+        "formal_training_authorized": False,
+    }
+    for key, value in expected.items():
+        if decision.get(key) != value or (
+            isinstance(value, bool) and type(decision.get(key)) is not bool
+        ):
+            raise ValueError(f"A/B prerequisite mismatch: {key}")
+    return {"sha256": actual_sha256, "status": decision["status"]}
 
 
 def verify_guarded_training_prerequisite(
