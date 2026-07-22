@@ -4,8 +4,10 @@ import sys
 from pathlib import Path
 
 import torch
+import pytest
 
 from scripts.train import fast_dev_gate_errors
+from scripts.verify_obsutil_empty_prefix import prefix_object_count
 from deepjump.config import load_config
 from deepjump.training import lr_at
 
@@ -58,6 +60,146 @@ def test_lr_horizon_preserves_reference_schedule_for_bounded_probe():
     assert fp32.train.lr_horizon_steps == fp16.train.lr_horizon_steps == 1000
     assert not fp32.train.amp
     assert fp16.train.amp and fp16.train.amp_dtype == "fp16"
+
+
+def test_paper_horizon_ab_freezes_expected_lr_trajectories():
+    baseline = load_config(
+        "configs/v100_tensorcloud01_full_d1_fp32_horizon_ab_baseline2000.yaml"
+    )
+    candidate = load_config(
+        "configs/v100_tensorcloud01_full_d1_fp32_paper_horizon500k_2000.yaml"
+    )
+    assert [lr_at(step, baseline) for step in (0, 199, 200, 1000, 1999)] == pytest.approx(
+        [2.5e-5, 5.0e-3, 5.0e-3, 3.0e-3, 3.0e-3]
+    )
+    assert [lr_at(step, candidate) for step in (0, 199, 200, 1000, 1999)] == pytest.approx(
+        [
+            2.5e-5,
+            5.0e-3,
+            5.0e-3,
+            0.004996798719487795,
+            0.004992801120448179,
+        ]
+    )
+
+
+def test_paper_horizon_ab_runner_is_matched_bounded_and_fail_closed():
+    runner = Path("cloud/huawei/run_paper_horizon_ab2000.sh").read_text()
+    prefix_verifier = Path("scripts/verify_obsutil_empty_prefix.py").read_text()
+    assert 'HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-600}' in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 600 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        'EXPECTED_REPO_COMMIT=${EXPECTED_REPO_COMMIT:?'
+    )
+    assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
+    assert "systemctl is-active" in runner
+    assert "/usr/bin/systemctl poweroff" in runner
+    assert '[[ -z "$(git status --porcelain)" ]]' in runner
+    assert "v100_tensorcloud01_full_d1_fp32_horizon_ab_baseline2000.yaml" in runner
+    assert "v100_tensorcloud01_full_d1_fp32_paper_horizon500k_2000.yaml" in runner
+    assert 'scripts/train_ddp.py --config "$config"' in runner
+    assert "--resume" not in runner
+    assert "--warm-start" not in runner
+    assert "run_arm baseline" in runner and "run_arm candidate" in runner
+    assert "paper-horizon-ab-baseline1000" in runner
+    assert "paper-horizon-500k" in runner
+    assert runner.count("scripts/guarded_endpoint_panel_eval.py") == 2
+    assert "run_panel baseline" in runner and "run_panel candidate" in runner
+    assert "scripts/adjudicate_paper_horizon_ab.py" in runner
+    assert 'verify_readback "$READBACK_ONE"' in runner
+    assert 'verify_readback "$READBACK_TWO"' in runner
+    assert "OBS_DOUBLE_READBACK_PASS" in runner
+    assert '"formal_training_authorized": False' in runner
+    assert '"second_seed_authorized": False' in runner
+    assert "second_seed_scientifically_eligible" in runner
+    assert '[[ "$BUCKET" == "obs://deepjump-mdcath-cn4-ringochen" ]]' in runner
+    assert "RUN_ID must be UTC basic timestamp" in runner
+    assert "refusing to reuse non-empty OBS evidence prefix" in prefix_verifier
+    assert "scripts/verify_obsutil_empty_prefix.py" in runner
+    assert "Object number" in prefix_verifier
+    assert "Folder number" in prefix_verifier
+    assert "File number" in prefix_verifier
+    assert '"authorization_requires_independent_readback": True' in runner
+    assert "final_markers.sha256" in runner
+    assert '"$READBACK_TWO/audit/decision.json"' in runner
+    assert 'decision.get("status") == "PASS_PAPER_HORIZON_EXTERNAL20"' in runner
+    assert 'scientifically_eligible is True' in runner
+    assert "ADVANCE_PAPER_HORIZON_EXTERNAL20" in runner
+    assert "SKIPPED_PAPER_HORIZON_EXTERNAL20" in runner
+    assert "paper_horizon_external_dev_20_length_proportional_seed20260723.txt" in runner
+    assert "run_external_panel baseline" in runner
+    assert "run_external_panel candidate" in runner
+    assert "--panel-kind paper-horizon-external" in runner
+    assert "scripts/train_ddp.py" not in runner.split(
+        "if [[ \"$training_ab_status\" == ADVANCE_PAPER_HORIZON_EXTERNAL20 ]]"
+    )[1]
+
+
+def test_paper_horizon_postrun_certifier_is_read_only_bounded_and_source_bound():
+    runner = Path("cloud/huawei/certify_paper_horizon_postrun.sh").read_text()
+    assert "HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-45}" in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 45 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        '[[ "$SHUTDOWN_ON_EXIT" == 1 ]]'
+    )
+    assert "/usr/bin/systemctl poweroff" in runner
+    assert "20260722T012922Z" in runner
+    assert "dbbc86daa1bc7dd123d52924f7ab6eed21c96b9b" in runner
+    assert '[[ "$(git rev-parse HEAD)" == "$EXPECTED_REPO_COMMIT" ]]' in runner
+    assert '[[ -z "$(git status --porcelain)" ]]' in runner
+    assert 'download_readback "$READBACK_ONE"' in runner
+    assert 'download_readback "$READBACK_TWO"' in runner
+    assert "scripts/certify_paper_horizon_postrun.py" in runner
+    assert "scripts/verify_obsutil_empty_prefix.py" in runner
+    assert "certification.sha256" in runner
+    assert "torchrun" not in runner
+    assert "CUDA_VISIBLE_DEVICES" not in runner
+    assert "scripts/train_ddp.py --config" not in runner
+
+
+@pytest.mark.parametrize(
+    ("report", "expected"),
+    [
+        ("Object number: 0\n", 0),
+        ("Object number is: 2\n", 2),
+        ("Folder number: 0\nFile number: 0\n", 0),
+        ("Folder number: 1\nFile number: 2\n", 3),
+    ],
+)
+def test_obsutil_prefix_count_supports_cloud_output_variants(report, expected):
+    assert prefix_object_count(report) == expected
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        "",
+        "Total size of prefix: 0B\n",
+        "Folder number: 0\n",
+        "File number: 0\n",
+        "Object number: 0\nObject number: 3\n",
+        "Object number: 0\nFolder number: 1\nFile number: 0\n",
+        "Object number: 0\nFolder number: 0\nFile number: 0\n",
+        "Folder number: 0\nFolder number: 2\nFile number: 0\n",
+        "Folder number: 0\nFile number: 0\nFile number: 2\n",
+    ],
+)
+def test_obsutil_prefix_count_rejects_incomplete_or_unknown_output(report):
+    with pytest.raises(ValueError, match="count|format"):
+        prefix_object_count(report)
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        "Object number: not-a-number\n",
+        "Folder number: 0 objects\nFile number: 0\n",
+        "prefix Object number: 0\n",
+    ],
+)
+def test_obsutil_prefix_count_rejects_malformed_count_lines(report):
+    with pytest.raises(ValueError, match="malformed count line"):
+        prefix_object_count(report)
 
 
 def _write_checkpoint(

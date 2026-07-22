@@ -18,7 +18,11 @@ from scripts.adjudicate_endpoint_panel import _t_summary
 from scripts.endpoint_panel_eval import EXPECTED_DOMAINS, EXPECTED_STARTS
 from scripts.external_endpoint_identity import (
     _sha256,
+    load_fresh_external_panels,
+    load_paper_horizon_external_panels,
+    verify_guarded_training_prerequisite,
     verify_multidomain_checkpoint,
+    verify_paper_horizon_ab_prerequisite,
 )
 from scripts.guarded_endpoint_panel_eval import (
     BOND_MAX,
@@ -26,11 +30,25 @@ from scripts.guarded_endpoint_panel_eval import (
     BOND_MEAN_LO,
     EXPECTED_CHECKPOINT_SHA256,
     EXPECTED_CHECKPOINT_STEP,
+    EXPECTED_EXTERNAL_BYTES,
+    EXPECTED_EXTERNAL_PANEL_SHA256,
     EXPECTED_PANEL_SHA256,
+    EXPECTED_PAPER_HORIZON_EXTERNAL_BYTES,
+    EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256,
+    EXPECTED_PRIOR_EXTERNAL_SHA256,
     EXPECTED_TRAINING_SHA256,
+    EXPECTED_TRAINING_DECISION_SHA256,
+    EXPECTED_UNTOUCHED_SHA256,
+    EXTERNAL_SCOPE,
+    HORIZON_AB_BASELINE_PROFILE,
     MAX_FALLBACK_CELLS,
     MAX_FALLBACK_STARTS,
+    CHECKPOINT_PROFILES,
+    FROZEN_BASELINE_PROFILE,
+    PAPER_HORIZON_EXTERNAL_SCOPE,
+    PAPER_HORIZON_PROFILE,
     SCOPE,
+    checkpoint_profile_requirements,
 )
 
 
@@ -81,34 +99,127 @@ def adjudicate(
     training_domain_list_sha256: str,
     domain_list: str | Path,
     domain_list_sha256: str,
+    *,
+    panel_kind: str = "training",
+    prior_external_domain_list: str | Path | None = None,
+    prior_external_domain_list_sha256: str | None = None,
+    prior_fresh_external_domain_list: str | Path | None = None,
+    prior_fresh_external_domain_list_sha256: str | None = None,
+    untouched_domain_list: str | Path | None = None,
+    untouched_domain_list_sha256: str | None = None,
+    prerequisite_decision: str | Path | None = None,
+    prerequisite_decision_sha256: str | None = None,
+    candidate_checkpoint_sha256: str | None = None,
+    checkpoint_profile: str = FROZEN_BASELINE_PROFILE,
 ) -> dict:
-    if checkpoint_sha256 != EXPECTED_CHECKPOINT_SHA256:
-        raise ValueError("checkpoint is not the frozen full-tensor step2000 artifact")
+    if panel_kind not in {"training", "fresh-external", "paper-horizon-external"}:
+        raise ValueError("unknown guarded panel kind")
+    expected_data, expected_model, expected_train = checkpoint_profile_requirements(
+        checkpoint_profile, checkpoint_sha256
+    )
+    if panel_kind == "fresh-external" and checkpoint_profile != FROZEN_BASELINE_PROFILE:
+        raise ValueError("legacy fresh-external requires the frozen baseline profile")
+    if panel_kind == "paper-horizon-external" and checkpoint_profile not in {
+        HORIZON_AB_BASELINE_PROFILE, PAPER_HORIZON_PROFILE
+    }:
+        raise ValueError("paper-horizon external requires a matched A/B checkpoint profile")
     if training_domain_list_sha256 != EXPECTED_TRAINING_SHA256:
         raise ValueError("training subset identity mismatch")
-    if domain_list_sha256 != EXPECTED_PANEL_SHA256:
-        raise ValueError("training development panel identity mismatch")
+    expected_panel_sha = {
+        "training": EXPECTED_PANEL_SHA256,
+        "fresh-external": EXPECTED_EXTERNAL_PANEL_SHA256,
+        "paper-horizon-external": EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256,
+    }[panel_kind]
+    if domain_list_sha256 != expected_panel_sha:
+        raise ValueError(f"{panel_kind} panel identity mismatch")
     checkpoint, train_fingerprint = verify_multidomain_checkpoint(
         checkpoint_path,
         checkpoint_sha256,
         expected_step=EXPECTED_CHECKPOINT_STEP,
+        expected_data_config=expected_data,
+        expected_model_config=expected_model,
+        expected_train_config=expected_train,
     )
     training_ids, training_sha = load_frozen_domain_ids(
         training_domain_list, training_domain_list_sha256
     )
-    panel_ids, panel_sha = load_frozen_domain_ids(domain_list, domain_list_sha256)
+    prerequisite = None
+    if panel_kind == "fresh-external":
+        if prior_external_domain_list_sha256 != EXPECTED_PRIOR_EXTERNAL_SHA256:
+            raise ValueError("prior external panel identity mismatch")
+        if untouched_domain_list_sha256 != EXPECTED_UNTOUCHED_SHA256:
+            raise ValueError("untouched panel identity mismatch")
+        if prerequisite_decision_sha256 != EXPECTED_TRAINING_DECISION_SHA256:
+            raise ValueError("training prerequisite decision identity mismatch")
+        if not all((prior_external_domain_list, untouched_domain_list, prerequisite_decision)):
+            raise ValueError("fresh external prerequisite paths are missing")
+        contract = load_fresh_external_panels(
+            training_domain_list, training_domain_list_sha256,
+            prior_external_domain_list, prior_external_domain_list_sha256,
+            untouched_domain_list, untouched_domain_list_sha256,
+            domain_list, domain_list_sha256,
+        )
+        panel_ids = contract["fresh_external"]["ids"]
+        panel_sha = contract["fresh_external"]["sha256"]
+        prerequisite = verify_guarded_training_prerequisite(
+            prerequisite_decision,
+            prerequisite_decision_sha256,
+            expected_checkpoint_sha256=EXPECTED_CHECKPOINT_SHA256,
+            expected_training_sha256=EXPECTED_TRAINING_SHA256,
+        )
+    elif panel_kind == "paper-horizon-external":
+        if prior_external_domain_list_sha256 != EXPECTED_PRIOR_EXTERNAL_SHA256:
+            raise ValueError("prior external panel identity mismatch")
+        if prior_fresh_external_domain_list_sha256 != EXPECTED_EXTERNAL_PANEL_SHA256:
+            raise ValueError("prior fresh external panel identity mismatch")
+        if untouched_domain_list_sha256 != EXPECTED_UNTOUCHED_SHA256:
+            raise ValueError("untouched panel identity mismatch")
+        if not all((
+            prior_external_domain_list,
+            prior_fresh_external_domain_list,
+            untouched_domain_list,
+            prerequisite_decision,
+            prerequisite_decision_sha256,
+            candidate_checkpoint_sha256,
+        )):
+            raise ValueError("paper-horizon external prerequisite paths are missing")
+        contract = load_paper_horizon_external_panels(
+            training_domain_list, training_domain_list_sha256,
+            prior_external_domain_list, prior_external_domain_list_sha256,
+            prior_fresh_external_domain_list, prior_fresh_external_domain_list_sha256,
+            untouched_domain_list, untouched_domain_list_sha256,
+            domain_list, domain_list_sha256,
+        )
+        panel_ids = contract["paper_horizon_external"]["ids"]
+        panel_sha = contract["paper_horizon_external"]["sha256"]
+        prerequisite = verify_paper_horizon_ab_prerequisite(
+            prerequisite_decision,
+            prerequisite_decision_sha256,
+            expected_candidate_checkpoint_sha256=candidate_checkpoint_sha256,
+            expected_training_sha256=EXPECTED_TRAINING_SHA256,
+            expected_training_panel_sha256=EXPECTED_PANEL_SHA256,
+        )
+    else:
+        panel_ids, panel_sha = load_frozen_domain_ids(domain_list, domain_list_sha256)
     if len(training_ids) != 1000 or len(set(training_ids)) != 1000:
         raise ValueError("training subset must contain 1000 unique domains")
     if len(panel_ids) != EXPECTED_DOMAINS or len(set(panel_ids)) != EXPECTED_DOMAINS:
         raise ValueError("training development panel must contain 20 unique domains")
-    if not set(panel_ids).issubset(training_ids):
+    if panel_kind == "training" and not set(panel_ids).issubset(training_ids):
         raise ValueError("training development panel must be contained in training1000")
 
     result = json.loads(Path(result_path).read_text())
-    if result.get("scope") != SCOPE:
+    expected_scope = {
+        "training": SCOPE,
+        "fresh-external": EXTERNAL_SCOPE,
+        "paper-horizon-external": PAPER_HORIZON_EXTERNAL_SCOPE,
+    }[panel_kind]
+    if result.get("scope") != expected_scope:
         raise ValueError("guarded panel scope mismatch")
     if result.get("checkpoint_sha256") != checkpoint_sha256:
         raise ValueError("result checkpoint SHA256 mismatch")
+    if result.get("checkpoint_profile", FROZEN_BASELINE_PROFILE) != checkpoint_profile:
+        raise ValueError("result checkpoint profile mismatch")
     if int(result.get("checkpoint_step", -1)) != EXPECTED_CHECKPOINT_STEP:
         raise ValueError("result checkpoint step mismatch")
     if int(result.get("checkpoint_schema", -1)) != 2:
@@ -154,8 +265,30 @@ def adjudicate(
     panel = result.get("domain_panel", {})
     if panel.get("sha256") != panel_sha or panel.get("ids") != panel_ids:
         raise ValueError("training development panel identity or order mismatch")
-    if panel.get("subset_of_training1000") is not True:
+    if panel.get("subset_of_training1000") is not (panel_kind == "training"):
         raise ValueError("panel inclusion proof is missing")
+    if panel_kind in {"fresh-external", "paper-horizon-external"} and panel.get(
+        "fresh_external"
+    ) is not True:
+        raise ValueError("fresh external panel identity flag mismatch")
+    if panel_kind == "training" and panel.get("fresh_external") not in (None, False):
+        raise ValueError("training panel is incorrectly marked fresh external")
+    if panel_kind == "fresh-external":
+        if int(panel.get("exclusion_union_count", -1)) != 1120:
+            raise ValueError("fresh external exclusion-union proof is missing")
+        if int(panel.get("total_bytes", -1)) != EXPECTED_EXTERNAL_BYTES:
+            raise ValueError("fresh external panel byte count mismatch")
+        if result.get("prerequisite") != prerequisite:
+            raise ValueError("fresh external prerequisite binding mismatch")
+    if panel_kind == "paper-horizon-external":
+        if panel.get("paper_horizon_external") is not True:
+            raise ValueError("paper-horizon external panel identity flag mismatch")
+        if int(panel.get("exclusion_union_count", -1)) != 1140:
+            raise ValueError("paper-horizon exclusion-union proof is missing")
+        if int(panel.get("total_bytes", -1)) != EXPECTED_PAPER_HORIZON_EXTERNAL_BYTES:
+            raise ValueError("paper-horizon external panel byte count mismatch")
+        if result.get("prerequisite") != prerequisite:
+            raise ValueError("paper-horizon prerequisite binding mismatch")
     if int(panel.get("h5_files", -1)) != EXPECTED_DOMAINS:
         raise ValueError("training development panel HDF5 count mismatch")
     if int(panel.get("total_bytes", -1)) <= 0:
@@ -414,14 +547,27 @@ def adjudicate(
     elif primary["standard_error"] <= ZERO_WIDTH_EPS:
         status = "INCONCLUSIVE_CONDITIONAL_SAFEGUARD_ZERO_VARIANCE"
     elif statistical_pass:
-        status = "PASS_CONDITIONAL_SAFEGUARD_TRAINING_DEV20"
+        status = {
+            "training": "PASS_CONDITIONAL_SAFEGUARD_TRAINING_DEV20",
+            "fresh-external": "PASS_CONDITIONAL_SAFEGUARD_EXTERNAL_DEV20",
+            "paper-horizon-external": (
+                "PASS_CONDITIONAL_SAFEGUARD_PAPER_HORIZON_EXTERNAL20"
+            ),
+        }[panel_kind]
     else:
         status = "STOP_CONDITIONAL_SAFEGUARD_NO_ADVANTAGE"
 
     return {
         "status": status,
-        "scope": "conditional reject-to-source training-domain 20x5x5x3 gate",
+        "scope": {
+            "training": "conditional reject-to-source training-domain 20x5x5x3 gate",
+            "fresh-external": "conditional reject-to-source fresh-external 20x5x5x3 gate",
+            "paper-horizon-external": (
+                "conditional reject-to-source paper-horizon external 20x5x5x3 gate"
+            ),
+        }[panel_kind],
         "checkpoint_sha256": checkpoint_sha256,
+        "checkpoint_profile": checkpoint_profile,
         "checkpoint_step": EXPECTED_CHECKPOINT_STEP,
         "checkpoint_train_fingerprint": train_fingerprint,
         "training_domain_list_sha256": training_sha,
@@ -445,11 +591,18 @@ def adjudicate(
         "leave_one_domain_out": leave_one_out,
         "guarded_cells_better_than_noop": guarded_cells_better,
         "decision_rule": expected_settings,
-        "training_development_gate_completed": True,
+        "training_development_gate_completed": panel_kind == "training",
+        "external_development_gate_completed": panel_kind in {
+            "fresh-external", "paper-horizon-external"
+        },
         "external_development_authorized": (
-            status == "PASS_CONDITIONAL_SAFEGUARD_TRAINING_DEV20"
+            panel_kind == "training"
+            and status == "PASS_CONDITIONAL_SAFEGUARD_TRAINING_DEV20"
         ),
-        "second_seed_authorized": False,
+        "second_seed_authorized": (
+            panel_kind == "fresh-external"
+            and status == "PASS_CONDITIONAL_SAFEGUARD_EXTERNAL_DEV20"
+        ),
         "untouched_confirmation_authorized": False,
         "formal_training_authorized": False,
     }
@@ -460,10 +613,26 @@ def main() -> None:
     parser.add_argument("--result", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--checkpoint-sha256", required=True)
+    parser.add_argument("--checkpoint-profile", choices=CHECKPOINT_PROFILES,
+                        default=FROZEN_BASELINE_PROFILE)
     parser.add_argument("--training-domain-list", required=True)
     parser.add_argument("--training-domain-list-sha256", required=True)
     parser.add_argument("--domain-list", required=True)
     parser.add_argument("--domain-list-sha256", required=True)
+    parser.add_argument(
+        "--panel-kind",
+        choices=("training", "fresh-external", "paper-horizon-external"),
+        default="training",
+    )
+    parser.add_argument("--prior-external-domain-list")
+    parser.add_argument("--prior-external-domain-list-sha256")
+    parser.add_argument("--prior-fresh-external-domain-list")
+    parser.add_argument("--prior-fresh-external-domain-list-sha256")
+    parser.add_argument("--untouched-domain-list")
+    parser.add_argument("--untouched-domain-list-sha256")
+    parser.add_argument("--prerequisite-decision")
+    parser.add_argument("--prerequisite-decision-sha256")
+    parser.add_argument("--candidate-checkpoint-sha256")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     report = adjudicate(
@@ -474,6 +643,19 @@ def main() -> None:
         args.training_domain_list_sha256,
         args.domain_list,
         args.domain_list_sha256,
+        panel_kind=args.panel_kind,
+        prior_external_domain_list=args.prior_external_domain_list,
+        prior_external_domain_list_sha256=args.prior_external_domain_list_sha256,
+        prior_fresh_external_domain_list=args.prior_fresh_external_domain_list,
+        prior_fresh_external_domain_list_sha256=(
+            args.prior_fresh_external_domain_list_sha256
+        ),
+        untouched_domain_list=args.untouched_domain_list,
+        untouched_domain_list_sha256=args.untouched_domain_list_sha256,
+        prerequisite_decision=args.prerequisite_decision,
+        prerequisite_decision_sha256=args.prerequisite_decision_sha256,
+        candidate_checkpoint_sha256=args.candidate_checkpoint_sha256,
+        checkpoint_profile=args.checkpoint_profile,
     )
     Path(args.output).write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))

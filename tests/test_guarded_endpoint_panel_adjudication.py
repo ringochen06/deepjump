@@ -7,8 +7,18 @@ import pytest
 import scripts.adjudicate_guarded_endpoint_panel as adjudicator
 from scripts.guarded_endpoint_panel_eval import (
     EXPECTED_CHECKPOINT_SHA256,
+    EXPECTED_EXTERNAL_BYTES,
+    EXPECTED_EXTERNAL_PANEL_SHA256,
     EXPECTED_PANEL_SHA256,
+    EXPECTED_PAPER_HORIZON_EXTERNAL_BYTES,
+    EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256,
+    EXPECTED_PRIOR_EXTERNAL_SHA256,
     EXPECTED_TRAINING_SHA256,
+    EXPECTED_TRAINING_DECISION_SHA256,
+    EXPECTED_UNTOUCHED_SHA256,
+    EXTERNAL_SCOPE,
+    PAPER_HORIZON_EXTERNAL_SCOPE,
+    PAPER_HORIZON_PROFILE,
     SCOPE,
 )
 
@@ -216,6 +226,147 @@ def test_guarded_panel_pass_authorizes_only_new_external_development(tmp_path, m
     assert report["source_physical_cells"] == 500
     assert report["guarded_physical_cells"] == 500
     assert report["external_development_authorized"] is True
+    assert report["second_seed_authorized"] is False
+    assert report["formal_training_authorized"] is False
+
+
+def test_fresh_external_pass_authorizes_only_second_seed(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "ckpt_2000.pt"
+    checkpoint.write_bytes(b"identity is supplied by the frozen hash contract")
+    payload = _result_payload(checkpoint)
+    old_ids = payload["domain_panel"]["ids"]
+    fresh_list = Path("configs/guarded_external_dev_20_length_proportional_seed20260722.txt")
+    fresh_ids = fresh_list.read_text().splitlines()
+    mapping = dict(zip(old_ids, fresh_ids))
+    payload["scope"] = EXTERNAL_SCOPE
+    payload["domain_panel"] = {
+        "sha256": EXPECTED_EXTERNAL_PANEL_SHA256,
+        "ids": fresh_ids,
+        "subset_of_training1000": False,
+        "fresh_external": True,
+        "exclusion_union_count": 1120,
+        "h5_files": 20,
+        "total_bytes": EXPECTED_EXTERNAL_BYTES,
+    }
+    payload["prerequisite"] = {
+        "sha256": EXPECTED_TRAINING_DECISION_SHA256,
+        "status": "PASS_CONDITIONAL_SAFEGUARD_TRAINING_DEV20",
+    }
+    payload["mechanism_probe"]["domain"] = fresh_ids[0]
+    payload["runtime_probe"]["domain"] = fresh_ids[-1]
+    for domain in payload["domains"]:
+        domain["domain"] = mapping[domain["domain"]]
+        for cell in domain["cells"]:
+            cell["domain"] = domain["domain"]
+    result = tmp_path / "result.json"
+    result.write_text(json.dumps(payload))
+    prerequisite = tmp_path / "decision.json"
+    prerequisite.write_text("{}")
+    monkeypatch.setattr(
+        adjudicator,
+        "verify_multidomain_checkpoint",
+        lambda *args, **kw: ({"step": 2000}, TRAIN_FINGERPRINT),
+    )
+    monkeypatch.setattr(
+        adjudicator,
+        "verify_guarded_training_prerequisite",
+        lambda *args, **kw: payload["prerequisite"],
+    )
+    report = adjudicator.adjudicate(
+        result, checkpoint, EXPECTED_CHECKPOINT_SHA256,
+        TRAINING_LIST, EXPECTED_TRAINING_SHA256,
+        fresh_list, EXPECTED_EXTERNAL_PANEL_SHA256,
+        panel_kind="fresh-external",
+        prior_external_domain_list=Path("configs/external_dev_20_length_proportional_seed20260721.txt"),
+        prior_external_domain_list_sha256=EXPECTED_PRIOR_EXTERNAL_SHA256,
+        untouched_domain_list=Path("configs/confirmation_100_length_proportional_seed20260717.txt"),
+        untouched_domain_list_sha256=EXPECTED_UNTOUCHED_SHA256,
+        prerequisite_decision=prerequisite,
+        prerequisite_decision_sha256=EXPECTED_TRAINING_DECISION_SHA256,
+    )
+    assert report["status"] == "PASS_CONDITIONAL_SAFEGUARD_EXTERNAL_DEV20"
+    assert report["external_development_authorized"] is False
+    assert report["second_seed_authorized"] is True
+    assert report["untouched_confirmation_authorized"] is False
+    assert report["formal_training_authorized"] is False
+
+
+def test_paper_horizon_external_individual_gate_defers_seed1_to_ab(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "candidate_2000.pt"
+    checkpoint.write_bytes(b"candidate identity is supplied by the run contract")
+    checkpoint_sha = "b" * 64
+    payload = _result_payload(checkpoint)
+    old_ids = payload["domain_panel"]["ids"]
+    panel_list = Path(
+        "configs/paper_horizon_external_dev_20_length_proportional_seed20260723.txt"
+    )
+    panel_ids = panel_list.read_text().splitlines()
+    mapping = dict(zip(old_ids, panel_ids))
+    payload["scope"] = PAPER_HORIZON_EXTERNAL_SCOPE
+    payload["checkpoint_sha256"] = checkpoint_sha
+    payload["checkpoint_profile"] = PAPER_HORIZON_PROFILE
+    payload["domain_panel"] = {
+        "sha256": EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256,
+        "ids": panel_ids,
+        "subset_of_training1000": False,
+        "fresh_external": True,
+        "paper_horizon_external": True,
+        "exclusion_union_count": 1140,
+        "h5_files": 20,
+        "total_bytes": EXPECTED_PAPER_HORIZON_EXTERNAL_BYTES,
+    }
+    payload["prerequisite"] = {
+        "sha256": "f" * 64,
+        "status": "ADVANCE_PAPER_HORIZON_EXTERNAL20",
+    }
+    payload["mechanism_probe"]["domain"] = panel_ids[0]
+    payload["runtime_probe"]["domain"] = panel_ids[-1]
+    for domain in payload["domains"]:
+        domain["domain"] = mapping[domain["domain"]]
+        for cell in domain["cells"]:
+            cell["domain"] = domain["domain"]
+    result = tmp_path / "paper_external_result.json"
+    result.write_text(json.dumps(payload))
+    prerequisite = tmp_path / "training_ab_decision.json"
+    prerequisite.write_text("{}")
+    monkeypatch.setattr(
+        adjudicator,
+        "verify_multidomain_checkpoint",
+        lambda *args, **kw: ({"step": 2000}, TRAIN_FINGERPRINT),
+    )
+    monkeypatch.setattr(
+        adjudicator,
+        "verify_paper_horizon_ab_prerequisite",
+        lambda *args, **kw: payload["prerequisite"],
+    )
+    report = adjudicator.adjudicate(
+        result,
+        checkpoint,
+        checkpoint_sha,
+        TRAINING_LIST,
+        EXPECTED_TRAINING_SHA256,
+        panel_list,
+        EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256,
+        panel_kind="paper-horizon-external",
+        checkpoint_profile=PAPER_HORIZON_PROFILE,
+        prior_external_domain_list=Path(
+            "configs/external_dev_20_length_proportional_seed20260721.txt"
+        ),
+        prior_external_domain_list_sha256=EXPECTED_PRIOR_EXTERNAL_SHA256,
+        prior_fresh_external_domain_list=Path(
+            "configs/guarded_external_dev_20_length_proportional_seed20260722.txt"
+        ),
+        prior_fresh_external_domain_list_sha256=EXPECTED_EXTERNAL_PANEL_SHA256,
+        untouched_domain_list=Path(
+            "configs/confirmation_100_length_proportional_seed20260717.txt"
+        ),
+        untouched_domain_list_sha256=EXPECTED_UNTOUCHED_SHA256,
+        prerequisite_decision=prerequisite,
+        prerequisite_decision_sha256="f" * 64,
+        candidate_checkpoint_sha256=checkpoint_sha,
+    )
+    assert report["status"] == "PASS_CONDITIONAL_SAFEGUARD_PAPER_HORIZON_EXTERNAL20"
+    assert report["external_development_gate_completed"] is True
     assert report["second_seed_authorized"] is False
     assert report["formal_training_authorized"] is False
 

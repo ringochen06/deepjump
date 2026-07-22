@@ -32,13 +32,21 @@ from scripts.endpoint_panel_eval import (
     _runtime_probe_status,
 )
 from scripts.external_endpoint_identity import (
+    load_fresh_external_panels,
+    load_paper_horizon_external_panels,
+    verify_guarded_training_prerequisite,
     verify_multidomain_checkpoint,
+    verify_paper_horizon_ab_prerequisite,
     verify_training_fingerprint,
 )
 from scripts.external_endpoint_root_cause import _batch, _cell_tensors
 
 
 SCOPE = "conditional_reject_to_source_training_dev20_v1"
+EXTERNAL_SCOPE = "conditional_reject_to_source_fresh_external_dev20_v1"
+PAPER_HORIZON_EXTERNAL_SCOPE = (
+    "conditional_reject_to_source_paper_horizon_external_dev20_v1"
+)
 EXPECTED_CHECKPOINT_SHA256 = (
     "f3b5965303794e14059f2b67b6b81a538fadb1303c44e1d7c640af44ea690222"
 )
@@ -49,11 +57,128 @@ EXPECTED_TRAINING_SHA256 = (
 EXPECTED_PANEL_SHA256 = (
     "4fd7015951fc48598d7beb888670d701b39697cdf62c2982a95b2b7b243474af"
 )
+EXPECTED_EXTERNAL_PANEL_SHA256 = (
+    "9bae11fa0e6336e7451c372efa25ca55af77aa9cb27f91e1fd241612531a920f"
+)
+EXPECTED_PRIOR_EXTERNAL_SHA256 = (
+    "9fb229049aec41ac9b376b447938930e434c94b7e106dfe5dc1ae1ac8cdaf245"
+)
+EXPECTED_UNTOUCHED_SHA256 = (
+    "e56ed7de735db542f4e20fb73f2654a6c1bcf67f3082849f63f0ab74f4208c38"
+)
+EXPECTED_TRAINING_DECISION_SHA256 = (
+    "b234f31db96c2f461ea0abd056aa6e724d2d94aa52930bbc990c43cfc302000b"
+)
+EXPECTED_EXTERNAL_BYTES = 13_354_825_648
+EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256 = (
+    "9c53aa3a5ccbc08531dea066b8ba09914f1a6b45bf3a3500d24d966ed21381bb"
+)
+EXPECTED_PAPER_HORIZON_EXTERNAL_BYTES = 14_236_836_972
 BOND_MEAN_LO = 3.2
 BOND_MEAN_HI = 4.5
 BOND_MAX = 5.5
 MAX_FALLBACK_STARTS = 3
 MAX_FALLBACK_CELLS = 1
+FROZEN_BASELINE_PROFILE = "frozen-baseline"
+HORIZON_AB_BASELINE_PROFILE = "paper-horizon-ab-baseline1000"
+PAPER_HORIZON_PROFILE = "paper-horizon-500k"
+CHECKPOINT_PROFILES = (
+    FROZEN_BASELINE_PROFILE,
+    HORIZON_AB_BASELINE_PROFILE,
+    PAPER_HORIZON_PROFILE,
+)
+
+_PAPER_HORIZON_DATA_CONFIG = {
+    "root": "/data/mdcath",
+    "manifest": "/data/mdcath/manifest.json",
+    "domains": [],
+    "temperatures": [320, 348, 379, 413, 450],
+    "replicas": [0, 1, 2, 3, 4],
+    "delta_frames": 1,
+    "crop_length": 256,
+    "val_fraction": 0.02,
+    "noise_sigma": 0.1,
+    "unroll": 1,
+    "canon_symmetric": True,
+    "max_open_files": 96,
+    "seed": 0,
+}
+_PAPER_HORIZON_MODEL_CONFIG = {
+    "hidden": 128,
+    "vector_channels": 128,
+    "num_heads": 4,
+    "cond_layers": 6,
+    "transport_layers": 6,
+    "seq_embed_ks": 32,
+    "num_dist_basis": 16,
+    "dist_cutoff": 25.0,
+    "predict_heavy": True,
+    "input_aug_sigma": 0.0,
+    "source_noise_v": True,
+    "source_noise_sigma_v": None,
+    "vector_qk": False,
+    "tensor_qkv": False,
+    "paper_ff": False,
+    "tensor_cloud01": True,
+    "tensor_cloud01_vector_only_attention": False,
+}
+_PAPER_HORIZON_TRAIN_CONFIG = {
+    "batch_size": 2,
+    "grad_accum": 8,
+    "lr": 5.0e-3,
+    "lr_final": 3.0e-3,
+    "warmup_steps": 200,
+    "grad_clip": 0.1,
+    "max_steps": 2000,
+    "val_every": 100,
+    "log_every": 50,
+    "ckpt_every": 1000,
+    "keep_last_k": 2,
+    "huber_delta": 1.0,
+    "geom_huber_delta": 0.05,
+    "w_ca": 0.0,
+    "w_bond": 0.0,
+    "w_bond_unroll": 0.0,
+    "w_geom_length_unroll": 0.0,
+    "w_geom_angle_unroll": 0.0,
+    "w_offset": 0.0,
+    "w_allatom": 1.0,
+    "w_unroll": 0.0,
+    "amp": False,
+    "amp_dtype": "fp16",
+    "num_workers": 8,
+    "device": "cuda",
+    "resume": "",
+    "seed": 0,
+}
+
+
+def checkpoint_profile_requirements(
+    profile: str, checkpoint_sha256: str
+) -> tuple[dict | None, dict | None, dict | None]:
+    """Return exact checkpoint recipe constraints for a guarded-panel profile."""
+    if profile == FROZEN_BASELINE_PROFILE:
+        if checkpoint_sha256 != EXPECTED_CHECKPOINT_SHA256:
+            raise ValueError("checkpoint is not the frozen full-tensor step2000 artifact")
+        return None, None, None
+    if profile not in {HORIZON_AB_BASELINE_PROFILE, PAPER_HORIZON_PROFILE}:
+        raise ValueError("unknown checkpoint profile")
+    if len(checkpoint_sha256) != 64 or any(
+        char not in "0123456789abcdef" for char in checkpoint_sha256
+    ):
+        raise ValueError("checkpoint SHA256 must be 64 lowercase hex characters")
+    horizon = 1000 if profile == HORIZON_AB_BASELINE_PROFILE else 500000
+    out_dir = (
+        "runs/v100_tensorcloud01_full_d1_fp32_horizon_ab_baseline2000"
+        if profile == HORIZON_AB_BASELINE_PROFILE
+        else "runs/v100_tensorcloud01_full_d1_fp32_paper_horizon500k_2000"
+    )
+    train = {
+        **_PAPER_HORIZON_TRAIN_CONFIG,
+        "lr_horizon_steps": horizon,
+        "out_dir": out_dir,
+    }
+    return _PAPER_HORIZON_DATA_CONFIG, _PAPER_HORIZON_MODEL_CONFIG, train
 
 
 def _finite_or_none(value: float) -> float | None:
@@ -323,35 +448,147 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", required=True)
     parser.add_argument("--checkpoint-sha256", required=True)
+    parser.add_argument("--checkpoint-profile", choices=CHECKPOINT_PROFILES,
+                        default=FROZEN_BASELINE_PROFILE)
     parser.add_argument("--training-data-root", required=True)
     parser.add_argument("--training-domain-list", required=True)
     parser.add_argument("--training-domain-list-sha256", required=True)
     parser.add_argument("--domain-list", required=True)
     parser.add_argument("--domain-list-sha256", required=True)
+    parser.add_argument(
+        "--panel-kind",
+        choices=("training", "fresh-external", "paper-horizon-external"),
+        default="training",
+    )
+    parser.add_argument("--panel-data-root")
+    parser.add_argument("--prior-external-domain-list")
+    parser.add_argument("--prior-external-domain-list-sha256")
+    parser.add_argument("--prior-fresh-external-domain-list")
+    parser.add_argument("--prior-fresh-external-domain-list-sha256")
+    parser.add_argument("--untouched-domain-list")
+    parser.add_argument("--untouched-domain-list-sha256")
+    parser.add_argument("--prerequisite-decision")
+    parser.add_argument("--prerequisite-decision-sha256")
+    parser.add_argument("--candidate-checkpoint-sha256")
     parser.add_argument("--runtime-probe-output", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
-    if args.checkpoint_sha256 != EXPECTED_CHECKPOINT_SHA256:
-        parser.error("checkpoint is not the frozen full-tensor step2000 artifact")
+    try:
+        expected_data, expected_model, expected_train = checkpoint_profile_requirements(
+            args.checkpoint_profile, args.checkpoint_sha256
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.panel_kind == "fresh-external" and args.checkpoint_profile != FROZEN_BASELINE_PROFILE:
+        parser.error("legacy fresh-external requires the frozen baseline profile")
+    if args.panel_kind == "paper-horizon-external" and args.checkpoint_profile not in {
+        HORIZON_AB_BASELINE_PROFILE, PAPER_HORIZON_PROFILE
+    }:
+        parser.error("paper-horizon external requires a matched A/B checkpoint profile")
     if args.training_domain_list_sha256 != EXPECTED_TRAINING_SHA256:
         parser.error("training subset identity mismatch")
-    if args.domain_list_sha256 != EXPECTED_PANEL_SHA256:
-        parser.error("training development panel identity mismatch")
+    expected_panel_sha = {
+        "training": EXPECTED_PANEL_SHA256,
+        "fresh-external": EXPECTED_EXTERNAL_PANEL_SHA256,
+        "paper-horizon-external": EXPECTED_PAPER_HORIZON_EXTERNAL_PANEL_SHA256,
+    }[args.panel_kind]
+    if args.domain_list_sha256 != expected_panel_sha:
+        parser.error(f"{args.panel_kind} panel identity mismatch")
     checkpoint, train_fingerprint = verify_multidomain_checkpoint(
-        args.ckpt, args.checkpoint_sha256, expected_step=EXPECTED_CHECKPOINT_STEP
+        args.ckpt,
+        args.checkpoint_sha256,
+        expected_step=EXPECTED_CHECKPOINT_STEP,
+        expected_data_config=expected_data,
+        expected_model_config=expected_model,
+        expected_train_config=expected_train,
     )
     training_ids, training_sha = load_frozen_domain_ids(
         args.training_domain_list, args.training_domain_list_sha256
     )
-    panel_ids, panel_sha = load_frozen_domain_ids(
-        args.domain_list, args.domain_list_sha256
-    )
+    prerequisite = None
+    panel_contract = None
+    if args.panel_kind == "fresh-external":
+        required = {
+            "prior external list": args.prior_external_domain_list,
+            "prior external SHA256": args.prior_external_domain_list_sha256,
+            "untouched list": args.untouched_domain_list,
+            "untouched SHA256": args.untouched_domain_list_sha256,
+            "prerequisite decision": args.prerequisite_decision,
+            "prerequisite decision SHA256": args.prerequisite_decision_sha256,
+            "panel data root": args.panel_data_root,
+        }
+        missing = [label for label, value in required.items() if not value]
+        if missing:
+            parser.error(f"fresh external panel is missing: {', '.join(missing)}")
+        if args.prior_external_domain_list_sha256 != EXPECTED_PRIOR_EXTERNAL_SHA256:
+            parser.error("prior external panel identity mismatch")
+        if args.untouched_domain_list_sha256 != EXPECTED_UNTOUCHED_SHA256:
+            parser.error("untouched panel identity mismatch")
+        if args.prerequisite_decision_sha256 != EXPECTED_TRAINING_DECISION_SHA256:
+            parser.error("training prerequisite decision identity mismatch")
+        panel_contract = load_fresh_external_panels(
+            args.training_domain_list, args.training_domain_list_sha256,
+            args.prior_external_domain_list, args.prior_external_domain_list_sha256,
+            args.untouched_domain_list, args.untouched_domain_list_sha256,
+            args.domain_list, args.domain_list_sha256,
+        )
+        panel_ids = panel_contract["fresh_external"]["ids"]
+        panel_sha = panel_contract["fresh_external"]["sha256"]
+        prerequisite = verify_guarded_training_prerequisite(
+            args.prerequisite_decision,
+            args.prerequisite_decision_sha256,
+            expected_checkpoint_sha256=EXPECTED_CHECKPOINT_SHA256,
+            expected_training_sha256=EXPECTED_TRAINING_SHA256,
+        )
+    elif args.panel_kind == "paper-horizon-external":
+        required = {
+            "prior external list": args.prior_external_domain_list,
+            "prior external SHA256": args.prior_external_domain_list_sha256,
+            "prior fresh external list": args.prior_fresh_external_domain_list,
+            "prior fresh external SHA256": args.prior_fresh_external_domain_list_sha256,
+            "untouched list": args.untouched_domain_list,
+            "untouched SHA256": args.untouched_domain_list_sha256,
+            "A/B prerequisite decision": args.prerequisite_decision,
+            "A/B prerequisite decision SHA256": args.prerequisite_decision_sha256,
+            "candidate checkpoint SHA256": args.candidate_checkpoint_sha256,
+            "panel data root": args.panel_data_root,
+        }
+        missing = [label for label, value in required.items() if not value]
+        if missing:
+            parser.error(f"paper-horizon external panel is missing: {', '.join(missing)}")
+        if args.prior_external_domain_list_sha256 != EXPECTED_PRIOR_EXTERNAL_SHA256:
+            parser.error("prior external panel identity mismatch")
+        if args.prior_fresh_external_domain_list_sha256 != EXPECTED_EXTERNAL_PANEL_SHA256:
+            parser.error("prior fresh external panel identity mismatch")
+        if args.untouched_domain_list_sha256 != EXPECTED_UNTOUCHED_SHA256:
+            parser.error("untouched panel identity mismatch")
+        panel_contract = load_paper_horizon_external_panels(
+            args.training_domain_list, args.training_domain_list_sha256,
+            args.prior_external_domain_list, args.prior_external_domain_list_sha256,
+            args.prior_fresh_external_domain_list,
+            args.prior_fresh_external_domain_list_sha256,
+            args.untouched_domain_list, args.untouched_domain_list_sha256,
+            args.domain_list, args.domain_list_sha256,
+        )
+        panel_ids = panel_contract["paper_horizon_external"]["ids"]
+        panel_sha = panel_contract["paper_horizon_external"]["sha256"]
+        prerequisite = verify_paper_horizon_ab_prerequisite(
+            args.prerequisite_decision,
+            args.prerequisite_decision_sha256,
+            expected_candidate_checkpoint_sha256=args.candidate_checkpoint_sha256,
+            expected_training_sha256=EXPECTED_TRAINING_SHA256,
+            expected_training_panel_sha256=EXPECTED_PANEL_SHA256,
+        )
+    else:
+        panel_ids, panel_sha = load_frozen_domain_ids(
+            args.domain_list, args.domain_list_sha256
+        )
     if len(training_ids) != 1000 or len(set(training_ids)) != 1000:
         raise ValueError("training subset must contain 1000 unique domains")
     if len(panel_ids) != EXPECTED_DOMAINS or len(set(panel_ids)) != EXPECTED_DOMAINS:
         raise ValueError("training development panel must contain 20 unique domains")
-    if not set(panel_ids).issubset(training_ids):
+    if args.panel_kind == "training" and not set(panel_ids).issubset(training_ids):
         raise ValueError("training development panel must be a subset of training1000")
     training_identity = verify_training_fingerprint(
         checkpoint,
@@ -366,8 +603,16 @@ def main() -> None:
     temperatures, replicas = require_mdcath_full_grid(
         data_cfg["temperatures"], data_cfg["replicas"]
     )
-    root = Path(args.training_data_root).expanduser().resolve()
+    root = Path(args.panel_data_root or args.training_data_root).expanduser().resolve()
     paths = resolve_frozen_domains(discover_domains(root), panel_ids)
+    panel_total_bytes = sum(path.stat().st_size for path in paths)
+    if args.panel_kind == "fresh-external" and panel_total_bytes != EXPECTED_EXTERNAL_BYTES:
+        raise ValueError("fresh external panel byte count mismatch")
+    if (
+        args.panel_kind == "paper-horizon-external"
+        and panel_total_bytes != EXPECTED_PAPER_HORIZON_EXTERNAL_BYTES
+    ):
+        raise ValueError("paper-horizon external panel byte count mismatch")
     device = resolve_device(checkpoint["cfg"]["train"]["device"])
     if device.type != "cuda":
         raise ValueError("conditional safeguard panel requires CUDA")
@@ -486,9 +731,14 @@ def main() -> None:
             handle.close()
 
     result = {
-        "scope": SCOPE,
+        "scope": {
+            "training": SCOPE,
+            "fresh-external": EXTERNAL_SCOPE,
+            "paper-horizon-external": PAPER_HORIZON_EXTERNAL_SCOPE,
+        }[args.panel_kind],
         "checkpoint": str(Path(args.ckpt).resolve()),
         "checkpoint_sha256": args.checkpoint_sha256,
+        "checkpoint_profile": args.checkpoint_profile,
         "checkpoint_step": int(checkpoint["step"]),
         "checkpoint_schema": int(checkpoint["checkpoint_schema"]),
         "checkpoint_train_seed": int(checkpoint["cfg"]["train"]["seed"]),
@@ -520,10 +770,18 @@ def main() -> None:
             "path": str(Path(args.domain_list).resolve()),
             "sha256": panel_sha,
             "ids": panel_ids,
-            "subset_of_training1000": True,
+            "subset_of_training1000": args.panel_kind == "training",
+            "fresh_external": args.panel_kind in {
+                "fresh-external", "paper-horizon-external"
+            },
+            "paper_horizon_external": args.panel_kind == "paper-horizon-external",
+            "exclusion_union_count": (
+                panel_contract["exclusion_union_count"] if panel_contract else None
+            ),
             "h5_files": len(paths),
-            "total_bytes": sum(path.stat().st_size for path in paths),
+            "total_bytes": panel_total_bytes,
         },
+        "prerequisite": prerequisite,
         "grid": {"temperatures": temperatures, "replicas": replicas},
         "mechanism_probe": mechanism,
         "runtime_probe": runtime_probe,

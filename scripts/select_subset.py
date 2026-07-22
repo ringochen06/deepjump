@@ -116,6 +116,25 @@ def pick_length_proportional(
     return sorted(chosen)
 
 
+def load_exclusions(paths: list[str] | None) -> tuple[set[str], list[dict[str, object]]]:
+    """Load repeated frozen exclusion lists and record their exact identities."""
+    excluded: set[str] = set()
+    identities: list[dict[str, object]] = []
+    for raw_path in paths or []:
+        path = Path(raw_path)
+        content = path.read_bytes()
+        domain_ids = [line.strip() for line in content.decode().splitlines() if line.strip()]
+        if len(domain_ids) != len(set(domain_ids)):
+            raise ValueError(f"exclusion list contains duplicate domains: {path}")
+        identities.append({
+            "path": str(path),
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "count": len(domain_ids),
+        })
+        excluded.update(domain_ids)
+    return excluded, identities
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--strategy", choices=("smallest", "length-proportional"), default="smallest")
@@ -123,23 +142,33 @@ def main() -> None:
     ap.add_argument("--max-gb", type=float, default=0.7, help="smallest strategy: per-file cap")
     ap.add_argument("--seed", type=int, default=20260715, help="length-proportional: sampling seed")
     ap.add_argument("--out", default="configs/subset_1000.txt", help="output id list")
-    ap.add_argument("--exclude-domains-file", help="domain ids to exclude before sampling")
+    ap.add_argument(
+        "--exclude-domains-file",
+        action="append",
+        dest="exclude_domains_files",
+        help="domain ids to exclude before sampling; repeat for multiple frozen lists",
+    )
     ap.add_argument("--metadata-out", help="write frozen selection metadata JSON")
     ap.add_argument("--source-h5", help="local official mdcath_source.h5 (avoids network)")
     ap.add_argument("--skip-size-report", action="store_true")
     args = ap.parse_args()
 
     if args.strategy == "length-proportional":
-        exclude = set()
-        if args.exclude_domains_file:
-            exclude = {
-                line.strip() for line in Path(args.exclude_domains_file).read_text().splitlines()
-                if line.strip()
-            }
+        exclude, exclusion_identities = load_exclusions(args.exclude_domains_files)
         residues = residues_from_source(args.source_h5) if args.source_h5 else None
         domains = pick_length_proportional(args.seed, args.n, exclude, residues)
     else:
         domains = pick_smallest(args.n, args.max_gb)
+        exclude = set()
+        exclusion_identities = []
+
+    expected_h5_bytes: int | None = None
+    if not args.skip_size_report:
+        try:
+            size = {_domain(path): bytes_ for path, bytes_ in list_data_files()}
+            expected_h5_bytes = sum(size[domain_id] for domain_id in domains)
+        except Exception:
+            expected_h5_bytes = None
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -151,10 +180,20 @@ def main() -> None:
             "seed": args.seed,
             "n": len(domains),
             "subset_sha256": hashlib.sha256(content).hexdigest(),
-            "exclude_domains_file": args.exclude_domains_file,
-            "exclude_count": len(exclude) if args.strategy == "length-proportional" else 0,
+            "exclude_domains_file": (
+                args.exclude_domains_files[0]
+                if args.exclude_domains_files and len(args.exclude_domains_files) == 1
+                else None
+            ),
+            "exclude_domains_files": exclusion_identities,
+            "exclude_count": len(exclude),
             "length_band_quotas": length_band_quotas(args.n)
             if args.strategy == "length-proportional" else None,
+            "source_h5_sha256": (
+                hashlib.sha256(Path(args.source_h5).read_bytes()).hexdigest()
+                if args.source_h5 else None
+            ),
+            "expected_h5_bytes": expected_h5_bytes,
         }
         metadata_out = Path(args.metadata_out)
         metadata_out.parent.mkdir(parents=True, exist_ok=True)
@@ -164,8 +203,9 @@ def main() -> None:
     try:
         if args.skip_size_report:
             raise RuntimeError("size report disabled")
-        size = {_domain(p): s for p, s in list_data_files()}
-        total = sum(size[d] for d in domains)
+        if expected_h5_bytes is None:
+            raise RuntimeError("size report unavailable")
+        total = expected_h5_bytes
         print(f"wrote {out}: {len(domains)} domains ({len(set(domains))} unique), "
               f"{total:,} bytes ({total/1e9:.1f} GB)")
     except Exception:

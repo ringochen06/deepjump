@@ -35,7 +35,15 @@ def audit(root: str, domain_list: str, domain_list_sha256: str, expected_bytes: 
     domain_ids, actual_sha256 = load_frozen_domain_ids(domain_list, domain_list_sha256)
     if len(domain_ids) != 20 or len(set(domain_ids)) != 20:
         raise ValueError("external data audit requires exactly 20 unique domains")
-    paths = resolve_frozen_domains(discover_domains(root), domain_ids)
+    discovered = discover_domains(root)
+    discovered_names = [path.stem.replace("mdcath_dataset_", "") for path in discovered]
+    if len(discovered_names) != len(set(discovered_names)):
+        raise ValueError("external data root contains duplicate HDF5 domain filenames")
+    if set(discovered_names) != set(domain_ids):
+        extra = sorted(set(discovered_names) - set(domain_ids))
+        missing = sorted(set(domain_ids) - set(discovered_names))
+        raise ValueError(f"external data root identity mismatch: extra={extra}, missing={missing}")
+    paths = resolve_frozen_domains(discovered, domain_ids)
     actual_names = {path.stem.replace("mdcath_dataset_", "") for path in paths}
     if actual_names != set(domain_ids):
         raise ValueError("external data filenames do not match the frozen panel")

@@ -7,7 +7,7 @@ import torch
 
 from scripts.adjudicate_external_endpoint_panel import adjudicate
 from deepjump.utils import split_domains
-from scripts.audit_external_mdcath import _available_replica_frames
+from scripts.audit_external_mdcath import _available_replica_frames, audit as audit_external
 from scripts.external_endpoint_identity import (
     _sha256,
     load_disjoint_panels,
@@ -33,6 +33,18 @@ def test_external_audit_reads_replica_from_tuple_second_field():
     ]
     with pytest.raises(ValueError, match="temperature"):
         _available_replica_frames(available, 348)
+
+
+def test_external_audit_rejects_extra_h5_before_reading_content(tmp_path):
+    domain_list = tmp_path / "domains.txt"
+    ids = [f"d{index:02d}" for index in range(20)]
+    domain_list.write_text("\n".join(ids) + "\n")
+    data = tmp_path / "data"
+    data.mkdir()
+    for domain_id in [*ids, "extra"]:
+        (data / f"mdcath_dataset_{domain_id}.h5").write_bytes(b"not hdf5")
+    with pytest.raises(ValueError, match="identity mismatch"):
+        audit_external(str(tmp_path), str(domain_list), _sha256(domain_list), 0)
 
 
 def _checkpoint(path: Path, *, step: int = 1000) -> str:
