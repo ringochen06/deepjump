@@ -42,7 +42,7 @@ trap shutdown_on_exit EXIT
   sudo -n systemctl show "$HARD_STOP_UNIT.timer" \
     -p ActiveState -p SubState -p TriggerUSec
   sudo -n systemctl cat "$HARD_STOP_UNIT.service" \
-    | grep -F 'ExecStart=/usr/bin/systemctl poweroff'
+    | grep -F 'ExecStart="/usr/bin/systemctl" "poweroff"'
 } | tee "$HARD_STOP_EVIDENCE"
 sudo -n shutdown -c 2>/dev/null || true
 

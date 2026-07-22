@@ -325,7 +325,7 @@ def test_scalar_feedback_runner_is_bounded_readback_closed_and_training_free():
     assert "HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-45}" in runner
     assert '[[ "$HARD_STOP_MINUTES" == 45 ]]' in runner
     assert '--on-active="${HARD_STOP_MINUTES}m"' in runner
-    assert "ExecStart=/usr/bin/systemctl poweroff" in runner
+    assert 'ExecStart="/usr/bin/systemctl" "poweroff"' in runner
     assert "timeout --signal=TERM --kill-after=30s 15m" in runner
     assert "scripts/rollout_robustness_eval.py" in runner
     assert "--domains 1 --starts 5 --steps 6 --methods mean --teacher-forced-mean" in runner
