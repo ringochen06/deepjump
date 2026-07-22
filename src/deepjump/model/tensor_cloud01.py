@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import torch
 import torch.nn as nn
 
@@ -28,6 +30,7 @@ class TensorCloud01Attention(nn.Module):
         num_dist_basis: int = 16,
         dist_cutoff: float = 25.0,
         vector_only: bool = False,
+        scalar_value_only: bool = False,
     ):
         super().__init__()
         if hidden % num_heads:
@@ -36,17 +39,45 @@ class TensorCloud01Attention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden // num_heads
         self.vector_only = vector_only
-        if not vector_only:
-            self.to_qkv_scalar = nn.Linear(hidden, 3 * hidden)
-        self.to_qkv_vector = EquivLinear(hidden, 3 * hidden)
-        self.sequence_bias = SequenceDistanceBias(num_heads, ks=seq_ks)
-        self.distance_bias = GaussianDistanceBias(
-            num_heads, num_basis=num_dist_basis, cutoff=dist_cutoff
-        )
+        self.scalar_value_only = scalar_value_only
+        if scalar_value_only and not vector_only:
+            raise ValueError("scalar_value_only requires vector_only attention logits")
         pair_channels = num_heads * (self.head_dim + 1)
-        if not vector_only:
+        if vector_only:
+            # Keep all shared modules in exactly the pure-vector initialization
+            # order. The optional scalar branch is created only afterwards so a
+            # common seed yields bitwise-identical shared initial weights.
+            self.to_qkv_vector = EquivLinear(hidden, 3 * hidden)
+            self.sequence_bias = SequenceDistanceBias(num_heads, ks=seq_ks)
+            self.distance_bias = GaussianDistanceBias(
+                num_heads, num_basis=num_dist_basis, cutoff=dist_cutoff
+            )
+            self.out_vector = EquivLinear(pair_channels, hidden)
+            if scalar_value_only:
+                # Initialize candidate-only parameters without advancing the
+                # process RNG. With a common seed, every shared parameter in a
+                # pure-vector and scalar-value model is therefore identical.
+                # Derive an independent substream from the current outer RNG
+                # state so candidate-only weights cannot accidentally reuse
+                # the following shared feed-forward initialization bytes.
+                with torch.random.fork_rng(devices=[]):
+                    outer_state = torch.random.get_rng_state()
+                    digest = hashlib.sha256(
+                        outer_state.numpy().tobytes()
+                        + b"deepjump.tensor_cloud01.scalar_value.v1"
+                    ).digest()
+                    torch.manual_seed(int.from_bytes(digest[:8], "big") >> 1)
+                    self.to_value_scalar = nn.Linear(hidden, hidden)
+                    self.out_scalar = nn.Linear(pair_channels, hidden)
+        else:
+            self.to_qkv_scalar = nn.Linear(hidden, 3 * hidden)
+            self.to_qkv_vector = EquivLinear(hidden, 3 * hidden)
+            self.sequence_bias = SequenceDistanceBias(num_heads, ks=seq_ks)
+            self.distance_bias = GaussianDistanceBias(
+                num_heads, num_basis=num_dist_basis, cutoff=dist_cutoff
+            )
             self.out_scalar = nn.Linear(pair_channels, hidden)
-        self.out_vector = EquivLinear(pair_channels, hidden)
+            self.out_vector = EquivLinear(pair_channels, hidden)
 
     def _project_qkv(self, scalar: torch.Tensor, vector: torch.Tensor):
         batch, residues, _ = scalar.shape
@@ -55,7 +86,12 @@ class TensorCloud01Attention(nn.Module):
         )
         vector_parts = vector_qkv.unbind(dim=2)
         if self.vector_only:
-            return (None, None, None, *vector_parts)
+            scalar_value = None
+            if self.scalar_value_only:
+                scalar_value = self.to_value_scalar(scalar).view(
+                    batch, residues, self.num_heads, self.head_dim
+                )
+            return (None, None, scalar_value, *vector_parts)
         scalar_qkv = self.to_qkv_scalar(scalar).view(
             batch, residues, 3, self.num_heads, self.head_dim
         )
@@ -111,7 +147,7 @@ class TensorCloud01Attention(nn.Module):
         vector_aggregate = torch.einsum(
             "bhij,bijhcx->bihcx", attention, vector_pair
         ).reshape(batch, residues, -1, 3)
-        if self.vector_only:
+        if scalar_value is None:
             scalar_out = torch.zeros_like(scalar)
         else:
             y0 = torch.ones(
@@ -144,10 +180,11 @@ class TensorCloud01FeedForward(PaperFeedForward):
 
 
 class TensorCloud01VectorAttentionNorm(nn.Module):
-    """Normalize only the vector stream consumed by vector-only attention."""
+    """Normalize the streams consumed by vector-logit attention."""
 
-    def __init__(self, hidden: int):
+    def __init__(self, hidden: int, *, scalar_value: bool = False):
         super().__init__()
+        self.scalar_norm = nn.LayerNorm(hidden) if scalar_value else None
         self.vec_gamma = nn.Parameter(torch.ones(hidden))
 
     def forward(self, scalar: torch.Tensor, vector: torch.Tensor):
@@ -155,6 +192,8 @@ class TensorCloud01VectorAttentionNorm(nn.Module):
         rms = vector_norm.square().mean(dim=-1, keepdim=True).clamp_min(EPS).sqrt()
         normalized = vector / rms.unsqueeze(-1)
         normalized = normalized * self.vec_gamma[None, None, :, None]
+        if self.scalar_norm is not None:
+            scalar = self.scalar_norm(scalar)
         return scalar, normalized
 
 
@@ -173,16 +212,24 @@ class TensorCloud01Block(nn.Module):
         num_dist_basis: int,
         dist_cutoff: float,
         vector_only_attention: bool = False,
+        vector_only_scalar_value: bool = False,
     ):
         super().__init__()
+        if vector_only_scalar_value and not vector_only_attention:
+            raise ValueError(
+                "vector_only_scalar_value requires vector_only_attention"
+            )
         self.norm1 = (
-            TensorCloud01VectorAttentionNorm(hidden)
+            TensorCloud01VectorAttentionNorm(
+                hidden, scalar_value=vector_only_scalar_value
+            )
             if vector_only_attention
             else ScalarVectorLayerNorm(hidden, hidden)
         )
         self.attention = TensorCloud01Attention(
             hidden, num_heads, seq_ks, num_dist_basis, dist_cutoff,
             vector_only=vector_only_attention,
+            scalar_value_only=vector_only_scalar_value,
         )
         self.norm2 = ScalarVectorLayerNorm(hidden, hidden)
         self.feedforward = TensorCloud01FeedForward(hidden, factor=2)

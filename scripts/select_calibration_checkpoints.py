@@ -42,6 +42,10 @@ def select_checkpoints(
         raise ValueError("config is not the reviewed TensorCloud01 architecture")
     if require_vector_only and model.get("tensor_cloud01_vector_only_attention") is not True:
         raise ValueError("config is not the reviewed vector-only attention candidate")
+    if require_vector_only and model.get(
+        "tensor_cloud01_vector_only_scalar_value", False
+    ) is not False:
+        raise ValueError("config is not the pure vector-only attention candidate")
     if train.get("max_steps") != 1000:
         raise ValueError("config is not the reviewed 1000-step calibration")
 

@@ -178,6 +178,23 @@ def _worker(rank, world, ret):
     same8, total8, first_bad8 = _frac_synced(m8, world)
     tensor_cloud01_vector_only_synced = same8 == total8
 
+    # (9) The normalized scalar-value residual candidate retains vector-only
+    # logits while adding a used scalar attention branch. Its DDP boundary must
+    # remain identical to the other TensorCloud01 variants.
+    tensor01_scalar_value_cfg = ModelConfig(
+        hidden=16, vector_channels=16, num_heads=2, cond_layers=1,
+        transport_layers=1, tensor_cloud01=True,
+        tensor_cloud01_vector_only_attention=True,
+        tensor_cloud01_vector_only_scalar_value=True,
+    )
+    torch.manual_seed(0)
+    m9 = DeepJumpLite(tensor01_scalar_value_cfg, predict_heavy=True)
+    m9.noise_sigma = 0.0
+    ddp9 = DDP(m9, find_unused_parameters=True)
+    _loss(ddp9(batch, tau=tau), batch).backward()
+    same9, total9, first_bad9 = _frac_synced(m9, world)
+    tensor_cloud01_scalar_value_synced = same9 == total9
+
     if rank == 0:
         ret["synced"] = bool(synced)
         ret["synced_frac"] = f"{same}/{total}"
@@ -203,6 +220,11 @@ def _worker(rank, world, ret):
         )
         ret["tensor_cloud01_vector_only_synced_frac"] = f"{same8}/{total8}"
         ret["tensor_cloud01_vector_only_first_unsynced"] = first_bad8
+        ret["tensor_cloud01_scalar_value_synced"] = bool(
+            tensor_cloud01_scalar_value_synced
+        )
+        ret["tensor_cloud01_scalar_value_synced_frac"] = f"{same9}/{total9}"
+        ret["tensor_cloud01_scalar_value_first_unsynced"] = first_bad9
     dist.destroy_process_group()
 
 
@@ -227,4 +249,5 @@ if __name__ == "__main__":
     ok = ok and res.get("paper_ff_synced") and res.get("tensor_qkv_synced")
     ok = ok and res.get("tensor_cloud01_synced")
     ok = ok and res.get("tensor_cloud01_vector_only_synced")
+    ok = ok and res.get("tensor_cloud01_scalar_value_synced")
     sys.exit(0 if ok else 1)

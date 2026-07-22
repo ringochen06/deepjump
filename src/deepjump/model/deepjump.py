@@ -34,9 +34,19 @@ class DeepJumpLite(nn.Module):
         tensor_cloud01_vector_only_attention = getattr(
             cfg, "tensor_cloud01_vector_only_attention", False
         )
+        tensor_cloud01_vector_only_scalar_value = getattr(
+            cfg, "tensor_cloud01_vector_only_scalar_value", False
+        )
         if tensor_cloud01_vector_only_attention and not tensor_cloud01:
             raise ValueError(
                 "tensor_cloud01_vector_only_attention requires tensor_cloud01"
+            )
+        if tensor_cloud01_vector_only_scalar_value and not (
+            tensor_cloud01 and tensor_cloud01_vector_only_attention
+        ):
+            raise ValueError(
+                "tensor_cloud01_vector_only_scalar_value requires "
+                "tensor_cloud01_vector_only_attention"
             )
         if tensor_cloud01 and any(
             getattr(cfg, name, False) for name in ("vector_qk", "tensor_qkv", "paper_ff")
@@ -57,6 +67,9 @@ class DeepJumpLite(nn.Module):
             paper_ff=getattr(cfg, "paper_ff", False),
             tensor_cloud01=tensor_cloud01,
             tensor_cloud01_vector_only_attention=tensor_cloud01_vector_only_attention,
+            tensor_cloud01_vector_only_scalar_value=(
+                tensor_cloud01_vector_only_scalar_value
+            ),
         )
         self.conditioner = Conditioner(num_layers=cfg.cond_layers, **common)
         self.transport = Transport(

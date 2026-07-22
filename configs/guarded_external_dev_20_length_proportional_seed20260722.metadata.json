@@ -1,0 +1,37 @@
+{
+  "strategy": "length-proportional",
+  "seed": 20260722,
+  "n": 20,
+  "subset_sha256": "9bae11fa0e6336e7451c372efa25ca55af77aa9cb27f91e1fd241612531a920f",
+  "exclude_domains_file": null,
+  "exclude_domains_files": [
+    {
+      "path": "configs/subset_1000_length_proportional.txt",
+      "sha256": "39278d6dc3de52065b19dffb2438eae53fca3730572bba30496c1b116d597734",
+      "count": 1000
+    },
+    {
+      "path": "configs/external_dev_20_length_proportional_seed20260721.txt",
+      "sha256": "9fb229049aec41ac9b376b447938930e434c94b7e106dfe5dc1ae1ac8cdaf245",
+      "count": 20
+    },
+    {
+      "path": "configs/confirmation_100_length_proportional_seed20260717.txt",
+      "sha256": "e56ed7de735db542f4e20fb73f2654a6c1bcf67f3082849f63f0ab74f4208c38",
+      "count": 100
+    }
+  ],
+  "exclude_count": 1120,
+  "length_band_quotas": [
+    2,
+    5,
+    4,
+    3,
+    2,
+    1,
+    1,
+    2
+  ],
+  "source_h5_sha256": "7f35d1c93a3c215859fbb401854d9e113ac670bccd45e1438d4be4abbbe3aa77",
+  "expected_h5_bytes": 13354825648
+}

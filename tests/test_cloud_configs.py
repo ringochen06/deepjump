@@ -450,3 +450,52 @@ def test_full_tensor_fp32_discriminator_matches_vector_only_budget():
     assert full_continuation.train.max_steps == 2000
     assert full_calibration.train.lr_horizon_steps == 1000
     assert full_continuation.train.lr_horizon_steps == 1000
+
+
+def test_paper_horizon_ab_configs_are_matched_fresh_continuous_runs():
+    baseline = load_config(
+        "configs/v100_tensorcloud01_full_d1_fp32_horizon_ab_baseline2000.yaml"
+    )
+    candidate = load_config(
+        "configs/v100_tensorcloud01_full_d1_fp32_paper_horizon500k_2000.yaml"
+    )
+    assert asdict(baseline.data) == asdict(candidate.data)
+    assert asdict(baseline.model) == asdict(candidate.model)
+    baseline_train = asdict(baseline.train)
+    candidate_train = asdict(candidate.train)
+    assert baseline_train.pop("lr_horizon_steps") == 1000
+    assert candidate_train.pop("lr_horizon_steps") == 500000
+    assert baseline_train.pop("out_dir").endswith("horizon_ab_baseline2000")
+    assert candidate_train.pop("out_dir").endswith("paper_horizon500k_2000")
+    assert baseline_train == candidate_train
+    for config in (baseline, candidate):
+        assert config.train.max_steps == 2000
+        assert config.train.resume == ""
+        assert config.train.batch_size * 8 * config.train.grad_accum == 128
+        assert config.train.ckpt_every == 1000
+        assert config.train.keep_last_k == 2
+        assert config.train.amp is False
+
+
+def test_paper_vector_config_differs_only_by_architecture_flag_and_output():
+    baseline = load_config(
+        "configs/v100_tensorcloud01_full_d1_fp32_paper_horizon500k_2000.yaml"
+    )
+    candidate = load_config(
+        "configs/v100_tensorcloud01_vector_only_d1_fp32_paper_horizon500k_2000.yaml"
+    )
+    assert asdict(baseline.data) == asdict(candidate.data)
+    baseline_model = asdict(baseline.model)
+    candidate_model = asdict(candidate.model)
+    assert baseline_model.pop("tensor_cloud01_vector_only_attention") is False
+    assert candidate_model.pop("tensor_cloud01_vector_only_attention") is True
+    assert baseline_model == candidate_model
+    baseline_train = asdict(baseline.train)
+    candidate_train = asdict(candidate.train)
+    assert baseline_train.pop("out_dir").endswith("paper_horizon500k_2000")
+    assert candidate_train.pop("out_dir").endswith("paper_horizon500k_2000")
+    assert baseline_train == candidate_train
+    assert candidate.train.lr_horizon_steps == 500000
+    assert candidate.train.resume == ""
+    assert candidate.train.batch_size * 8 * candidate.train.grad_accum == 128
+    assert candidate.train.amp is False
