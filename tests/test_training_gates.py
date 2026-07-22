@@ -135,6 +135,28 @@ def test_paper_horizon_ab_runner_is_matched_bounded_and_fail_closed():
     )[1]
 
 
+def test_paper_horizon_postrun_certifier_is_read_only_bounded_and_source_bound():
+    runner = Path("cloud/huawei/certify_paper_horizon_postrun.sh").read_text()
+    assert "HARD_STOP_MINUTES=${HARD_STOP_MINUTES:-45}" in runner
+    assert '[[ "$HARD_STOP_MINUTES" == 45 ]]' in runner
+    assert runner.index("trap shutdown_on_exit EXIT") < runner.index(
+        '[[ "$SHUTDOWN_ON_EXIT" == 1 ]]'
+    )
+    assert "/usr/bin/systemctl poweroff" in runner
+    assert "20260722T012922Z" in runner
+    assert "dbbc86daa1bc7dd123d52924f7ab6eed21c96b9b" in runner
+    assert '[[ "$(git rev-parse HEAD)" == "$EXPECTED_REPO_COMMIT" ]]' in runner
+    assert '[[ -z "$(git status --porcelain)" ]]' in runner
+    assert 'download_readback "$READBACK_ONE"' in runner
+    assert 'download_readback "$READBACK_TWO"' in runner
+    assert "scripts/certify_paper_horizon_postrun.py" in runner
+    assert "scripts/verify_obsutil_empty_prefix.py" in runner
+    assert "certification.sha256" in runner
+    assert "torchrun" not in runner
+    assert "CUDA_VISIBLE_DEVICES" not in runner
+    assert "scripts/train_ddp.py --config" not in runner
+
+
 @pytest.mark.parametrize(
     ("report", "expected"),
     [
