@@ -185,19 +185,21 @@ timeout --signal=TERM --kill-after=30s 12m obsutil sync \
 "$PYTHON" - "$SOURCE_READBACK/audit/summary.json" \
   "$SOURCE_READBACK/audit/readback_completion.json" \
   "$SOURCE_READBACK/audit/candidate_decision.json" \
+  "$SOURCE_READBACK/audit/decision.json" \
   "$BASELINE_SOURCE_RUN_ID" "$BASELINE_SOURCE_COMMIT" \
   "$BASELINE_CHECKPOINT_SHA256" <<'PY'
 import hashlib, json, sys
-summary_path, completion_path, decision_path = sys.argv[1:4]
-run_id, commit, checkpoint_sha = sys.argv[4:7]
+summary_path, completion_path, candidate_decision_path, decision_path = sys.argv[1:5]
+run_id, commit, checkpoint_sha = sys.argv[5:8]
 summary = json.load(open(summary_path))
 completion = json.load(open(completion_path))
+candidate_decision = json.load(open(candidate_decision_path))
 decision = json.load(open(decision_path))
 if summary.get("run_id") != run_id or completion.get("run_id") != run_id:
     raise SystemExit("sealed vector source run_id mismatch")
 if summary.get("commit") != commit or completion.get("commit") != commit:
     raise SystemExit("sealed vector source commit mismatch")
-for payload in (summary, completion, decision):
+for payload in (summary, completion, candidate_decision, decision):
     if payload.get("candidate_checkpoint_sha256", payload.get("checkpoint_sha256")) != checkpoint_sha:
         raise SystemExit("sealed vector source checkpoint mismatch")
 if not (

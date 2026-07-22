@@ -241,6 +241,12 @@ def test_scalar_value_ab_runner_is_training_only_and_fail_closed():
     assert "--evidence-manifest" in runner
     assert '"$SOURCE_READBACK/audit/summary.json"' in runner
     assert '"$SOURCE_READBACK/audit/readback_completion.json"' in runner
+    assert '"$SOURCE_READBACK/audit/candidate_decision.json"' in runner
+    assert '"$SOURCE_READBACK/audit/decision.json"' in runner
+    assert "summary_path, completion_path, candidate_decision_path, decision_path" in runner
+    assert 'completion.get("scientific_status")' in runner
+    assert 'decision.get("status")' in runner
+    assert 'open(decision_path, "rb")' in runner
     assert '"$RUN_DIR/sealed_baseline_decision.json"' in runner
     assert '"$RUN_DIR/candidate_config.yaml"' in runner
     assert "external_development_authorized\": False" in runner
