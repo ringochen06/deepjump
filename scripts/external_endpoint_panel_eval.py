@@ -28,6 +28,7 @@ from scripts.endpoint_panel_eval import (
     _runtime_probe_status,
 )
 from scripts.external_endpoint_identity import (
+    EXPECTED_CHECKPOINT_STEP,
     load_disjoint_panels,
     verify_multidomain_checkpoint,
     verify_training_fingerprint,
@@ -39,6 +40,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--ckpt", required=True)
     parser.add_argument("--checkpoint-sha256", required=True)
+    parser.add_argument(
+        "--expected-checkpoint-step", type=int, default=EXPECTED_CHECKPOINT_STEP
+    )
     parser.add_argument("--training-data-root", required=True)
     parser.add_argument("--training-domain-list", required=True)
     parser.add_argument("--training-domain-list-sha256", required=True)
@@ -53,7 +57,9 @@ def main() -> None:
         parser.error("the frozen external panel requires three starts per cell")
 
     checkpoint, train_fingerprint = verify_multidomain_checkpoint(
-        args.ckpt, args.checkpoint_sha256
+        args.ckpt,
+        args.checkpoint_sha256,
+        expected_step=args.expected_checkpoint_step,
     )
     model_cfg = checkpoint["cfg"]["model"]
     data_cfg = checkpoint["cfg"]["data"]

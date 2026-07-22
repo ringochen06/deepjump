@@ -41,6 +41,8 @@ def _require_digest(value: object, *, label: str) -> str:
 def verify_multidomain_checkpoint(
     checkpoint_path: str | Path,
     expected_sha256: str,
+    *,
+    expected_step: int = EXPECTED_CHECKPOINT_STEP,
 ) -> tuple[dict, str]:
     """Verify the frozen FP32 pilot checkpoint without trusting its filename."""
     actual_sha256 = _sha256(checkpoint_path)
@@ -48,8 +50,12 @@ def verify_multidomain_checkpoint(
     if not hmac.compare_digest(actual_sha256, expected_sha256):
         raise ValueError("checkpoint SHA256 mismatch")
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if checkpoint.get("step") != EXPECTED_CHECKPOINT_STEP:
-        raise ValueError("external endpoint gate requires checkpoint step 1000")
+    if expected_step < 1:
+        raise ValueError("expected checkpoint step must be positive")
+    if checkpoint.get("step") != expected_step:
+        raise ValueError(
+            f"external endpoint gate requires checkpoint step {expected_step}"
+        )
     if checkpoint.get("checkpoint_schema") != EXPECTED_CHECKPOINT_SCHEMA:
         raise ValueError("external endpoint gate requires checkpoint schema 2")
 
