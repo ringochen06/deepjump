@@ -106,3 +106,53 @@ def test_paper_vector_readback_pair_rejects_shared_inodes(tmp_path):
     target.hardlink_to(first / "audit" / "summary.json")
     with pytest.raises(ValueError, match="share file inodes"):
         verify_pair(first, second, "initial")
+
+
+def _rewrite_completion_identity(root: Path, status: str) -> str:
+    audit = root / "audit"
+    (audit / "decision.json").write_text(json.dumps({"status": status}) + "\n")
+    decision_sha = _sha(audit / "decision.json")
+    (audit / "summary.json").write_text(json.dumps({"status": status}) + "\n")
+    (audit / "readback_completion.json").write_text(json.dumps({
+        "scientific_status": status,
+        "decision_sha256": decision_sha,
+    }) + "\n")
+    _write_manifest(audit / "audit_sha256.txt", audit, set(COMMON_AUDIT_FILES))
+    _write_manifest(
+        audit / "readback_manifests.sha256",
+        audit,
+        {"baseline_sha256.txt", "candidate_sha256.txt", "audit_sha256.txt"},
+    )
+    _write_manifest(
+        audit / "final_marker.sha256",
+        audit,
+        {"readback_completion.json", "readback_manifests.sha256"},
+    )
+    return decision_sha
+
+
+def test_paper_vector_readback_binds_expected_final_identity(tmp_path):
+    root = _fixture(tmp_path, external=False, completion=True)
+    status = "STOP_PAPER_VECTOR_ABSOLUTE_GATE"
+    decision_sha = _rewrite_completion_identity(root, status)
+    report = verify(
+        root,
+        "completion",
+        expected_final_decision_sha256=decision_sha,
+        expected_final_status=status,
+    )
+    assert report["status"] == "PASS"
+
+
+def test_paper_vector_readback_rejects_reanchored_final_identity(tmp_path):
+    root = _fixture(tmp_path, external=False, completion=True)
+    sealed_status = "STOP_PAPER_VECTOR_ABSOLUTE_GATE"
+    sealed_sha = _rewrite_completion_identity(root, sealed_status)
+    _rewrite_completion_identity(root, "PASS_REANCHORED_FORGERY")
+    with pytest.raises(ValueError, match="sealed identity"):
+        verify(
+            root,
+            "completion",
+            expected_final_decision_sha256=sealed_sha,
+            expected_final_status=sealed_status,
+        )

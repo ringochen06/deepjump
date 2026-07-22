@@ -70,6 +70,8 @@ BASELINE_SOURCE_OBS="$BUCKET/deepjump-calibration/paper-vector-ab2000/$BASELINE_
 BASELINE_CHECKPOINT_SHA256=19d960826938419e1bf494701a09b395ece729e1c0dc2c8a5d1e6bf36d73053b
 BASELINE_HISTORY_SHA256=36f8850ba4e9c094526850370b22371d10df76765eead3e39adf051e68d0d80e
 BASELINE_DECISION_SHA256=0816f94b01bf8b434086677d59c913193a70aa8b802f79b46378590f772af7bf
+BASELINE_FINAL_DECISION_SHA256=1ceb092102c4c0ad608289a19d924a60e7f55df4fe226a21f8fd27895ab1bac6
+BASELINE_FINAL_STATUS=STOP_PAPER_VECTOR_ABSOLUTE_GATE
 CANDIDATE_CONFIG=configs/v100_tensorcloud01_vector_scalar_value_d1_fp32_paper_horizon500k_2000.yaml
 CANDIDATE_CONFIG_SHA256=2b6d96b647d386fe942bcfdc85dac29f6428b6fe685ce5b10a3f9117cdc48832
 TRAINING_DOMAIN_LIST=configs/subset_1000_length_proportional.txt
@@ -181,16 +183,19 @@ timeout --signal=TERM --kill-after=30s 12m obsutil sync \
   | tee "$RUN_DIR/source_audit_sync.log"
 "$PYTHON" scripts/verify_paper_vector_readback.py \
   --root "$SOURCE_READBACK" --phase completion \
+  --expected-final-decision-sha256 "$BASELINE_FINAL_DECISION_SHA256" \
+  --expected-final-status "$BASELINE_FINAL_STATUS" \
   --output "$RUN_DIR/source_readback_gate.json"
 "$PYTHON" - "$SOURCE_READBACK/audit/summary.json" \
   "$SOURCE_READBACK/audit/readback_completion.json" \
   "$SOURCE_READBACK/audit/candidate_decision.json" \
   "$SOURCE_READBACK/audit/decision.json" \
   "$BASELINE_SOURCE_RUN_ID" "$BASELINE_SOURCE_COMMIT" \
-  "$BASELINE_CHECKPOINT_SHA256" <<'PY'
+  "$BASELINE_CHECKPOINT_SHA256" "$BASELINE_FINAL_DECISION_SHA256" \
+  "$BASELINE_FINAL_STATUS" <<'PY'
 import hashlib, json, sys
 summary_path, completion_path, candidate_decision_path, decision_path = sys.argv[1:5]
-run_id, commit, checkpoint_sha = sys.argv[5:8]
+run_id, commit, checkpoint_sha, final_decision_sha, final_status = sys.argv[5:10]
 summary = json.load(open(summary_path))
 completion = json.load(open(completion_path))
 candidate_decision = json.load(open(candidate_decision_path))
@@ -206,10 +211,13 @@ if not (
     summary.get("status")
     == completion.get("scientific_status")
     == decision.get("status")
+    == final_status
 ):
     raise SystemExit("sealed vector source scientific status mismatch")
 decision_sha = hashlib.sha256(open(decision_path, "rb").read()).hexdigest()
-if completion.get("decision_sha256") != decision_sha:
+if decision_sha != final_decision_sha:
+    raise SystemExit("sealed vector source final decision identity mismatch")
+if completion.get("decision_sha256") != final_decision_sha:
     raise SystemExit("sealed vector source decision SHA mismatch")
 PY
 [[ "$(sha256sum "$BASELINE_DIR/ckpt_2000.pt" | awk '{print $1}')" == \

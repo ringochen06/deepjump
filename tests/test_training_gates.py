@@ -224,6 +224,10 @@ def test_scalar_value_ab_runner_is_training_only_and_fail_closed():
     assert "19d960826938419e1bf494701a09b395ece729e1c0dc2c8a5d1e6bf36d73053b" in runner
     assert "36f8850ba4e9c094526850370b22371d10df76765eead3e39adf051e68d0d80e" in runner
     assert "0816f94b01bf8b434086677d59c913193a70aa8b802f79b46378590f772af7bf" in runner
+    assert "1ceb092102c4c0ad608289a19d924a60e7f55df4fe226a21f8fd27895ab1bac6" in runner
+    assert "BASELINE_FINAL_STATUS=STOP_PAPER_VECTOR_ABSOLUTE_GATE" in runner
+    assert '--expected-final-decision-sha256 "$BASELINE_FINAL_DECISION_SHA256"' in runner
+    assert '--expected-final-status "$BASELINE_FINAL_STATUS"' in runner
     assert "v100_tensorcloud01_vector_scalar_value_d1_fp32_" in runner
     assert runner.count("scripts/train_ddp.py --config") == 1
     assert "--resume" not in runner

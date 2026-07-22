@@ -124,7 +124,42 @@ def _verify_manifest(path: Path, root: Path, expected: frozenset[str]) -> None:
             raise ValueError(f"{path}: member mismatch: {name}")
 
 
-def verify(root: Path, phase: str) -> dict:
+def _verify_expected_final(
+    audit: Path,
+    *,
+    expected_final_decision_sha256: str | None,
+    expected_final_status: str | None,
+) -> None:
+    if (expected_final_decision_sha256 is None) != (expected_final_status is None):
+        raise ValueError(
+            "expected final decision SHA and status must be provided together"
+        )
+    if expected_final_decision_sha256 is None:
+        return
+    decision_path = audit / "decision.json"
+    decision = json.loads(decision_path.read_text())
+    summary = json.loads((audit / "summary.json").read_text())
+    completion = json.loads((audit / "readback_completion.json").read_text())
+    if _sha256(decision_path) != expected_final_decision_sha256:
+        raise ValueError("final decision SHA does not match the sealed identity")
+    if not (
+        decision.get("status")
+        == summary.get("status")
+        == completion.get("scientific_status")
+        == expected_final_status
+    ):
+        raise ValueError("final scientific status does not match the sealed identity")
+    if completion.get("decision_sha256") != expected_final_decision_sha256:
+        raise ValueError("completion decision SHA does not match the sealed identity")
+
+
+def verify(
+    root: Path,
+    phase: str,
+    *,
+    expected_final_decision_sha256: str | None = None,
+    expected_final_status: str | None = None,
+) -> dict:
     baseline = root / "baseline"
     candidate = root / "candidate"
     audit = root / "audit"
@@ -160,6 +195,13 @@ def verify(root: Path, phase: str) -> dict:
         for name, digest in final_marker.items():
             if _sha256(audit / name) != digest:
                 raise ValueError(f"final marker mismatch: {name}")
+        _verify_expected_final(
+            audit,
+            expected_final_decision_sha256=expected_final_decision_sha256,
+            expected_final_status=expected_final_status,
+        )
+    elif expected_final_decision_sha256 is not None or expected_final_status is not None:
+        raise ValueError("sealed final identity requires a completion-phase readback")
     if _inventory(baseline) != set(BASELINE_FILES):
         raise ValueError("baseline exact inventory mismatch")
     if _inventory(candidate) != set(CANDIDATE_FILES):
@@ -191,9 +233,20 @@ def _snapshot(root: Path) -> list[tuple[str, int, str]]:
     return rows
 
 
-def verify_pair(first: Path, second: Path, phase: str) -> dict:
-    first_report = verify(first, phase)
-    second_report = verify(second, phase)
+def verify_pair(
+    first: Path,
+    second: Path,
+    phase: str,
+    *,
+    expected_final_decision_sha256: str | None = None,
+    expected_final_status: str | None = None,
+) -> dict:
+    expected = {
+        "expected_final_decision_sha256": expected_final_decision_sha256,
+        "expected_final_status": expected_final_status,
+    }
+    first_report = verify(first, phase, **expected)
+    second_report = verify(second, phase, **expected)
     if first.resolve() == second.resolve() or _snapshot(first) != _snapshot(second):
         raise ValueError("independent readback snapshots differ or share a root")
     first_inodes = {
@@ -221,11 +274,24 @@ def main() -> None:
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--root-two", type=Path)
     parser.add_argument("--phase", required=True, choices=("initial", "completion"))
+    parser.add_argument("--expected-final-decision-sha256")
+    parser.add_argument("--expected-final-status")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     report = (
-        verify_pair(args.root, args.root_two, args.phase)
-        if args.root_two is not None else verify(args.root, args.phase)
+        verify_pair(
+            args.root,
+            args.root_two,
+            args.phase,
+            expected_final_decision_sha256=args.expected_final_decision_sha256,
+            expected_final_status=args.expected_final_status,
+        )
+        if args.root_two is not None else verify(
+            args.root,
+            args.phase,
+            expected_final_decision_sha256=args.expected_final_decision_sha256,
+            expected_final_status=args.expected_final_status,
+        )
     )
     if args.output is not None:
         args.output.write_text(json.dumps(report, separators=(",", ":")) + "\n")
