@@ -180,6 +180,73 @@ def test_checkpoint_gate_rejects_same_path_sha_drift(tmp_path):
     assert "training checkpoint SHA256 mismatch" in errors
 
 
+@pytest.mark.parametrize(
+    ("step", "history_steps"),
+    [
+        (25, []),
+        (75, [50]),
+    ],
+)
+def test_checkpoint_gate_through_accepts_only_completed_validation_cadence(
+    tmp_path, step, history_steps
+):
+    fixture = _checkpoint_fixture(tmp_path)
+    payload = torch.load(fixture["checkpoint"], map_location="cpu", weights_only=False)
+    payload["step"] = step
+    torch.save(payload, fixture["checkpoint"])
+    _write_json(
+        fixture["history"],
+        [
+            {
+                "step": history_step,
+                "val_loss": 1.0,
+                "val_rmsd": 2.0,
+                "noop_rmsd": 3.0,
+            }
+            for history_step in history_steps
+        ],
+    )
+
+    _, errors = validate_checkpoint(
+        fixture["checkpoint"],
+        step,
+        8,
+        fixture["history"],
+        history_mode="through",
+        expected_delta=1,
+        require_full_tensor=True,
+        expected_lr_horizon_steps=500_000,
+        expected_config_path=fixture["config"],
+        expected_contract_verification_path=fixture["contract"],
+        expected_contract_verification_sha256=fixture["contract_sha256"],
+        expected_checkpoint_sha256=_file_sha256(fixture["checkpoint"]),
+    )
+    assert errors == []
+
+
+def test_checkpoint_gate_through_rejects_future_or_missing_validation_records(tmp_path):
+    fixture = _checkpoint_fixture(tmp_path)
+    payload = torch.load(fixture["checkpoint"], map_location="cpu", weights_only=False)
+    payload["step"] = 75
+    torch.save(payload, fixture["checkpoint"])
+
+    _, errors = validate_checkpoint(
+        fixture["checkpoint"],
+        75,
+        8,
+        fixture["history"],
+        history_mode="through",
+        expected_delta=1,
+        require_full_tensor=True,
+        expected_lr_horizon_steps=500_000,
+        expected_config_path=fixture["config"],
+        expected_contract_verification_path=fixture["contract"],
+        expected_contract_verification_sha256=fixture["contract_sha256"],
+        expected_checkpoint_sha256=_file_sha256(fixture["checkpoint"]),
+    )
+    assert any("exact completed validation cadence" in error for error in errors)
+
+
 @pytest.mark.parametrize("missing", ["opt", "scaler"])
 def test_checkpoint_gate_rejects_missing_restart_state(tmp_path, missing):
     fixture = _checkpoint_fixture(tmp_path)

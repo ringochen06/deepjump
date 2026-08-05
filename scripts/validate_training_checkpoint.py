@@ -17,7 +17,15 @@ import yaml
 from deepjump.config import Config, ModelConfig, _from_dict, to_dict
 from deepjump.data_contract import _read_regular_bytes
 from deepjump.model import DeepJumpLite
-from scripts.train_ddp import training_semantics_sha256
+try:
+    from scripts.train_ddp import training_semantics_sha256
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    # Direct execution places this script's directory, rather than the
+    # repository root, on sys.path. Support that execution mode without
+    # masking import failures from train_ddp or its dependencies.
+    from train_ddp import training_semantics_sha256
 
 
 _HEX = frozenset("0123456789abcdef")
@@ -211,7 +219,12 @@ def validate_checkpoint(
                 )
         if not _valid_sha256(train_state.get("train_fingerprint")):
             errors.append("checkpoint train_fingerprint is invalid")
-        if train_state.get("crop_resume") != "stochastic_worker_rng_not_bitwise":
+        expected_crop_resume = (
+            "state_consistent_non_bitwise_crop_and_noise"
+            if train_config.get("run_class") == "formal"
+            else "stochastic_worker_rng_not_bitwise"
+        )
+        if train_state.get("crop_resume") != expected_crop_resume:
             errors.append("checkpoint crop_resume contract is invalid")
 
     expected_config_sha256 = None
@@ -416,9 +429,14 @@ def validate_checkpoint(
         history = json.loads(history_raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("training history is not valid UTF-8 JSON") from exc
-    if not isinstance(history, list) or not history:
+    if not isinstance(history, list):
+        errors.append("history must be a JSON list")
+        selected_history = {}
+        history_steps = []
+    elif not history and history_mode != "through":
         errors.append("history is missing validation records")
         selected_history = {}
+        history_steps = []
     else:
         history_steps: list[int] = []
         noop_values: list[float] = []
@@ -455,26 +473,41 @@ def validate_checkpoint(
             current <= previous for previous, current in zip(history_steps, history_steps[1:])
         ):
             errors.append("history steps must be unique and strictly increasing")
-        if (
-            strict_restart
-            and history_mode == "final"
-            and isinstance(val_every, int)
-            and val_every > 0
-            and isinstance(max_steps, int)
-            and max_steps > 0
-            and expected_step == max_steps
-        ):
-            expected_history_steps = list(range(val_every, max_steps + 1, val_every))
-            if not expected_history_steps or expected_history_steps[-1] != max_steps:
-                expected_history_steps.append(max_steps)
-            if history_steps != expected_history_steps:
-                errors.append(
-                    "history does not contain the exact validation cadence through final step"
+        if strict_restart and isinstance(val_every, int) and val_every > 0:
+            if (
+                history_mode == "final"
+                and isinstance(max_steps, int)
+                and max_steps > 0
+                and expected_step == max_steps
+            ):
+                expected_history_steps = list(
+                    range(val_every, max_steps + 1, val_every)
                 )
+                if (
+                    not expected_history_steps
+                    or expected_history_steps[-1] != max_steps
+                ):
+                    expected_history_steps.append(max_steps)
+                if history_steps != expected_history_steps:
+                    errors.append(
+                        "history does not contain the exact validation cadence "
+                        "through final step"
+                    )
+            elif history_mode == "through":
+                expected_history_steps = list(
+                    range(val_every, expected_step + 1, val_every)
+                )
+                if history_steps != expected_history_steps:
+                    errors.append(
+                        "history does not contain the exact completed validation "
+                        "cadence through checkpoint step"
+                    )
         if noop_values and any(value != noop_values[0] for value in noop_values[1:]):
             errors.append("history noop_rmsd must remain constant")
         if history_mode == "final":
-            selected_history = history[-1] if isinstance(history[-1], dict) else {}
+            selected_history = (
+                history[-1] if history and isinstance(history[-1], dict) else {}
+            )
         elif history_mode == "contains":
             matches = [
                 entry
@@ -486,9 +519,16 @@ def validate_checkpoint(
                 errors.append(
                     f"history contains {len(matches)} records for step {expected_step}, expected 1"
                 )
+        elif history_mode == "through":
+            selected_history = (
+                history[-1] if history and isinstance(history[-1], dict) else {}
+            )
         else:
             raise ValueError(f"unsupported history mode: {history_mode}")
-        if selected_history.get("step") != expected_step:
+        if (
+            history_mode != "through"
+            and selected_history.get("step") != expected_step
+        ):
             errors.append(f"history step {selected_history.get('step')} != {expected_step}")
 
     report = {
@@ -530,7 +570,11 @@ def main() -> None:
     parser.add_argument("--history", required=True, type=Path)
     parser.add_argument("--expected-step", required=True, type=int)
     parser.add_argument("--expected-world-size", required=True, type=int)
-    parser.add_argument("--history-mode", choices=("final", "contains"), default="final")
+    parser.add_argument(
+        "--history-mode",
+        choices=("final", "contains", "through"),
+        default="final",
+    )
     parser.add_argument("--expected-delta", type=int)
     architecture = parser.add_mutually_exclusive_group()
     architecture.add_argument("--require-vector-only", action="store_true")

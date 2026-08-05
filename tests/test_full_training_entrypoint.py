@@ -113,8 +113,14 @@ def test_training_semantics_hash_allows_only_operational_cadence_changes():
     candidate.train.val_every = 2
     candidate.train.ckpt_every = 3
     candidate.train.keep_last_k = 9
-    candidate.train.num_workers = 4
     assert training_semantics_sha256(candidate) == training_semantics_sha256(baseline)
+
+
+def test_training_semantics_hash_freezes_worker_count():
+    baseline = Config()
+    candidate = Config()
+    candidate.train.num_workers = baseline.train.num_workers + 1
+    assert training_semantics_sha256(candidate) != training_semantics_sha256(baseline)
 
 
 def test_contracted_dataset_rejects_post_audit_fingerprint_drift(tmp_path):
