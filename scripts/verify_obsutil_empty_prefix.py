@@ -34,6 +34,33 @@ def prefix_object_count(text: str) -> int:
     raise ValueError("OBS prefix preflight requires one unique, unmixed count format")
 
 
+def prefix_file_inventory(text: str) -> tuple[int, int]:
+    """Return the exact file count and byte size from an unpaginated listing."""
+    if "Next marker:" in text:
+        raise ValueError("OBS prefix inventory is paginated")
+
+    file_pattern = re.compile(r"File number\s*:\s*([0-9]+)")
+    size_pattern = re.compile(r"Total size of prefix \[[^\]\n]+\]\s*:\s*([0-9]+)B")
+    file_counts: list[int] = []
+    total_bytes: list[int] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if "File number" in line:
+            match = file_pattern.fullmatch(line)
+            if match is None:
+                raise ValueError("OBS prefix inventory contains a malformed file count")
+            file_counts.append(int(match.group(1)))
+        if "Total size of prefix" in line:
+            match = size_pattern.fullmatch(line)
+            if match is None:
+                raise ValueError("OBS prefix inventory contains a malformed byte total")
+            total_bytes.append(int(match.group(1)))
+
+    if len(file_counts) != 1 or len(total_bytes) != 1:
+        raise ValueError("OBS prefix inventory requires one file count and byte total")
+    return file_counts[0], total_bytes[0]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("report")

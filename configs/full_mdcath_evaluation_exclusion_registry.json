@@ -1,0 +1,43 @@
+{
+  "official_domain_list_sha256": "295c6da1c9f8846a1ea3993eca12a3232d16a2b3a4b0d8791c7c45392186709b",
+  "panel_contract_sha256": "f5a772daa77a1f3118cc2e9151363d6a5a9f9737634b4a45561f09c302db2865",
+  "panels": [
+    {
+      "domains": 20,
+      "name": "fresh_external20",
+      "path": "external_dev_20_length_proportional_seed20260721.txt",
+      "role": "development_seen",
+      "sha256": "9fb229049aec41ac9b376b447938930e434c94b7e106dfe5dc1ae1ac8cdaf245"
+    },
+    {
+      "domains": 20,
+      "name": "guarded_external20",
+      "path": "guarded_external_dev_20_length_proportional_seed20260722.txt",
+      "role": "development_seen",
+      "sha256": "9bae11fa0e6336e7451c372efa25ca55af77aa9cb27f91e1fd241612531a920f"
+    },
+    {
+      "domains": 20,
+      "name": "legacy_dev20",
+      "path": "dev_20_length_proportional_seed0.txt",
+      "role": "development_seen",
+      "sha256": "4fd7015951fc48598d7beb888670d701b39697cdf62c2982a95b2b7b243474af"
+    },
+    {
+      "domains": 20,
+      "name": "paper_horizon_external20",
+      "path": "paper_horizon_external_dev_20_length_proportional_seed20260723.txt",
+      "role": "external_reserved",
+      "sha256": "9c53aa3a5ccbc08531dea066b8ba09914f1a6b45bf3a3500d24d966ed21381bb"
+    },
+    {
+      "domains": 100,
+      "name": "untouched_confirmation100",
+      "path": "confirmation_100_length_proportional_seed20260717.txt",
+      "role": "untouched_confirmation_reserved",
+      "sha256": "e56ed7de735db542f4e20fb73f2654a6c1bcf67f3082849f63f0ab74f4208c38"
+    }
+  ],
+  "schema": "deepjump.full_mdcath_evaluation_exclusion_registry.v1",
+  "source_revision": "5e3ed8aec62b689e01751db16275fdcdbc39e47f"
+}

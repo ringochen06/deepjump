@@ -14,6 +14,7 @@ import yaml
 class DataConfig:
     root: str = "~/hkucds/data/mdcath"  # where downloaded *.h5 live
     domains: list[str] = field(default_factory=list)  # empty => use all found under root
+    domains_file: str = ""  # sealed domain list; mutually exclusive with inline domains
     temperatures: list[int] = field(default_factory=lambda: [320])
     replicas: list[int] = field(default_factory=lambda: [0])
     delta_frames: object = 1  # int, or list e.g. [1,10,100] for multi-scale delta training
@@ -23,6 +24,8 @@ class DataConfig:
     unroll: int = 1  # number of future steps per sample (2 => self-conditioning training)
     canon_symmetric: bool = False  # canonicalise symmetric sidechain atom labelling
     manifest: str = ""  # path to manifest.json (build_manifest.py); "" => scan files at init
+    full_training_contract: str = ""  # sealed full-data authorization contract
+    full_training_contract_sha256: str = ""  # independently frozen contract identity
     max_open_files: int = 64  # per-worker LRU cap on open h5 handles (ulimit-safe)
     seed: int = 0
 
@@ -52,6 +55,7 @@ class ModelConfig:
 
 @dataclass
 class TrainConfig:
+    run_class: str = "development"  # development, full_data_stage, or formal
     batch_size: int = 4
     lr: float = 1e-3
     grad_clip: float = 0.1

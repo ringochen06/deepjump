@@ -19,6 +19,9 @@ import hashlib
 import json
 import math
 import os
+import signal
+import stat
+import tempfile
 import time
 from pathlib import Path
 
@@ -28,6 +31,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Subset
 
 from deepjump.config import load_config, to_dict
+from deepjump.data_contract import verify_full_training_data_contract
 from deepjump.data import (
     MdcathPairDataset,
     ResumableDistributedSampler,
@@ -56,26 +60,192 @@ def is_main(rank):
     return rank == 0
 
 
-def load_manifest(cfg):
+def _read_verified_artifact(path, expected_sha256, label):
+    """Read and hash one opened regular inode so verification and parsing share bytes."""
+    path = Path(path).expanduser()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"cannot open contracted {label} as a regular non-symlink file: {path}") from exc
+    with os.fdopen(descriptor, "rb") as handle:
+        before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"contracted {label} is not a regular file: {path}")
+        raw = handle.read()
+        after = os.fstat(handle.fileno())
+    identity = lambda value: (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+    if identity(before) != identity(after) or len(raw) != before.st_size:
+        raise ValueError(f"contracted {label} changed while it was being read: {path}")
+    actual_sha256 = hashlib.sha256(raw).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"contracted {label} SHA256 mismatch: {actual_sha256} != {expected_sha256}"
+        )
+    return raw
+
+
+def load_manifest(cfg, data_contract_verification=None):
     if cfg.data.manifest:
+        if cfg.data.full_training_contract:
+            if data_contract_verification is None:
+                raise ValueError("contracted dataset construction requires a verified contract report")
+            raw = _read_verified_artifact(
+                cfg.data.manifest,
+                data_contract_verification["manifest_sha256"],
+                "manifest",
+            )
+            return json.loads(raw.decode("utf-8"))
         return json.loads(Path(cfg.data.manifest).expanduser().read_text())
     return None
 
 
-def build_datasets(cfg):
+def bind_full_training_contract(cfg, cli_contract=None, cli_contract_sha256=None):
+    """Bind and verify the data identity before any distributed process group exists."""
+    if bool(cli_contract) != bool(cli_contract_sha256):
+        raise ValueError(
+            "--full-training-contract and --expected-full-training-contract-sha256 "
+            "must be set together"
+        )
+    if cli_contract:
+        if cfg.data.full_training_contract and (
+            Path(cfg.data.full_training_contract).expanduser().resolve()
+            != Path(cli_contract).expanduser().resolve()
+        ):
+            raise ValueError("CLI full training contract differs from the config")
+        if (
+            cfg.data.full_training_contract_sha256
+            and cfg.data.full_training_contract_sha256 != cli_contract_sha256
+        ):
+            raise ValueError("CLI full training contract SHA256 differs from the config")
+        cfg.data.full_training_contract = cli_contract
+        cfg.data.full_training_contract_sha256 = cli_contract_sha256
+
+    if cfg.train.run_class not in {"development", "full_data_stage", "formal"}:
+        raise ValueError(
+            "train.run_class must be 'development', 'full_data_stage', or 'formal'"
+        )
+    if cfg.train.max_steps >= 100_000 and cfg.train.run_class != "formal":
+        raise ValueError("runs of 100,000 steps or more must use train.run_class=formal")
+    has_contract_path = bool(cfg.data.full_training_contract)
+    has_contract_sha = bool(cfg.data.full_training_contract_sha256)
+    if has_contract_path != has_contract_sha:
+        raise ValueError(
+            "data.full_training_contract and data.full_training_contract_sha256 "
+            "must be set together"
+        )
+    if cfg.train.run_class != "development" and not has_contract_path:
+        raise ValueError(
+            "full-data stages and formal training require a sealed full training data contract"
+        )
+    if not has_contract_path:
+        return None
+    if not cfg.data.manifest or not cfg.data.domains_file:
+        raise ValueError(
+            "a full training contract requires data.manifest and data.domains_file"
+        )
+    return verify_full_training_data_contract(
+        cfg.data.full_training_contract,
+        cfg.data.full_training_contract_sha256,
+        configured_root=cfg.data.root,
+        configured_manifest=cfg.data.manifest,
+        configured_domains_file=cfg.data.domains_file,
+    )
+
+
+def validate_checkpoint_mode(data_contract_verification, warm_start, allow_legacy_resume):
+    if data_contract_verification is None:
+        return
+    if warm_start:
+        raise ValueError("contracted full-data runs cannot warm-start from prior weights")
+    if allow_legacy_resume:
+        raise ValueError("contracted full-data runs cannot allow legacy resume")
+
+
+def training_semantics_sha256(cfg) -> str:
+    """Hash every resume-sensitive setting while allowing only operational cadence drift."""
+    payload = to_dict(cfg)
+    train_payload = payload["train"]
+    train_payload["effective_lr_horizon_steps"] = (
+        train_payload["lr_horizon_steps"] or train_payload["max_steps"]
+    )
+    for field in (
+        "out_dir",
+        "log_every",
+        "val_every",
+        "ckpt_every",
+        "keep_last_k",
+        "max_steps",
+        "resume",
+    ):
+        train_payload.pop(field)
+    return hashlib.sha256(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+
+
+def _stat_fingerprint(path: Path) -> dict[str, int]:
+    stat_result = path.stat()
+    return {
+        "device": stat_result.st_dev,
+        "inode": stat_result.st_ino,
+        "size": stat_result.st_size,
+        "mtime_ns": stat_result.st_mtime_ns,
+        "ctime_ns": stat_result.st_ctime_ns,
+    }
+
+
+def build_datasets(cfg, data_contract_verification=None):
     """Split domains into train/val (by file, so val domains are unseen)."""
-    manifest = load_manifest(cfg)
+    manifest = load_manifest(cfg, data_contract_verification)
     if manifest is not None:
         files = [Path(cfg.data.root).expanduser() / "data" / e["file"] for e in manifest]
-        # fall back to any layout: resolve names against root recursively if needed
-        if not files or not files[0].exists():
+        if cfg.data.full_training_contract:
+            for entry, path in zip(manifest, files, strict=True):
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError(f"contracted manifest file is missing or not regular: {path}")
+                if _stat_fingerprint(path) != entry.get("local_fingerprint"):
+                    raise ValueError(f"contracted manifest file fingerprint mismatch: {path}")
+        # Development-only fallback supports legacy layouts without weakening a
+        # contracted full-data run's exact-root identity.
+        elif not files or not files[0].exists():
             found = {f.name: f for f in discover_domains(cfg.data.root)}
             files = [found[e["file"]] for e in manifest if e["file"] in found]
     else:
         files = discover_domains(cfg.data.root)
-    if cfg.data.domains:
-        wanted = set(cfg.data.domains)
+    if cfg.data.domains and cfg.data.domains_file:
+        raise ValueError("data.domains and data.domains_file are mutually exclusive")
+    configured_domains = cfg.data.domains
+    if cfg.data.domains_file:
+        if cfg.data.full_training_contract:
+            raw = _read_verified_artifact(
+                cfg.data.domains_file,
+                data_contract_verification["train_list_sha256"],
+                "train list",
+            )
+            configured_domains = raw.decode("utf-8").splitlines()
+        else:
+            domain_path = Path(cfg.data.domains_file).expanduser()
+            configured_domains = domain_path.read_text(encoding="utf-8").splitlines()
+        if not configured_domains or len(configured_domains) != len(set(configured_domains)):
+            raise ValueError("data.domains_file must contain unique non-empty domains")
+    if configured_domains:
+        wanted = set(configured_domains)
         files = [f for f in files if f.stem.replace("mdcath_dataset_", "") in wanted]
+        found_domains = {f.stem.replace("mdcath_dataset_", "") for f in files}
+        missing = sorted(wanted - found_domains)
+        if missing:
+            raise ValueError(f"configured domains are missing from the data root: {missing[:10]}")
+    if not cfg.data.full_training_contract and len(files) > 1_000:
+        raise ValueError(
+            "training more than 1,000 domains requires a sealed full training data contract"
+        )
     if not files:
         raise SystemExit(f"no mdCATH files under {cfg.data.root}")
     train_files, val_files = split_domains(files, cfg.data.val_fraction, cfg.data.seed)
@@ -149,35 +319,191 @@ def evaluate(model, loader, device, cfg, amp_dtype, max_batches=None):
             "noop_rmsd": sum(noop) / len(noop)}
 
 
-def save_ckpt(path, core, opt, scaler, step, cfg, train_state):
-    # Write atomically: torch.save to a temp file in the same dir, then os.replace (atomic on
-    # POSIX). A concurrent reader (e.g. cloud/huawei/ckpt_to_obs.sh syncing to OBS) then always sees a
-    # complete file -- old or new, never a half-written last.ckpt.
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_write_json(path: Path, payload, *, overwrite: bool) -> None:
     path = Path(path)
-    tmp = path.with_name(path.name + ".tmp")
-    torch.save({"model": core.state_dict(), "opt": opt.state_dict(),
-                "scaler": scaler.state_dict(), "step": step, "cfg": to_dict(cfg),
-                "checkpoint_schema": 2, "train_state": train_state}, tmp)
-    os.replace(tmp, path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.tmp."
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if overwrite:
+            os.replace(temporary, path)
+        else:
+            os.link(temporary, path)
+            temporary.unlink()
+        _fsync_directory(path.parent)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _load_resume_history(path: Path, *, start_step: int, val_every: int) -> list[dict]:
+    raw = _read_verified_artifact_unhashed(path, "resume history")
+    try:
+        history = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("resume history is not valid UTF-8 JSON") from exc
+    if not isinstance(history, list):
+        raise ValueError("resume history must be a JSON list")
+    steps = []
+    for index, record in enumerate(history):
+        if not isinstance(record, dict):
+            raise ValueError(f"resume history record {index} is not an object")
+        step = record.get("step")
+        if not isinstance(step, int) or isinstance(step, bool) or step <= 0:
+            raise ValueError(f"resume history record {index} has an invalid step")
+        for field in ("val_loss", "val_rmsd", "noop_rmsd"):
+            value = record.get(field)
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+            ):
+                raise ValueError(
+                    f"resume history record {index} has invalid {field}"
+                )
+        steps.append(step)
+    if any(current <= previous for previous, current in zip(steps, steps[1:])):
+        raise ValueError("resume history steps must be unique and strictly increasing")
+    expected = list(range(val_every, start_step + 1, val_every))
+    if steps != expected:
+        raise ValueError(
+            "resume history does not contain the exact completed validation cadence"
+        )
+    return history
+
+
+def _read_verified_artifact_unhashed(path, label):
+    """Read stable bytes from one regular non-symlink inode without a prior digest."""
+    path = Path(path).expanduser()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(
+            f"cannot open {label} as a regular non-symlink file: {path}"
+        ) from exc
+    with os.fdopen(descriptor, "rb") as handle:
+        before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"{label} is not a regular file: {path}")
+        raw = handle.read()
+        after = os.fstat(handle.fileno())
+    identity = lambda value: (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+    if identity(before) != identity(after) or len(raw) != before.st_size:
+        raise ValueError(f"{label} changed while it was being read: {path}")
+    return raw
+
+
+def save_ckpt(path, core, opt, scaler, step, cfg, train_state):
+    """Durably publish a checkpoint; numbered checkpoints are immutable."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    numbered = path.name.startswith("ckpt_") and path.name.endswith(".pt")
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.tmp."
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            torch.save(
+                {
+                    "model": core.state_dict(),
+                    "opt": opt.state_dict(),
+                    "scaler": scaler.state_dict(),
+                    "step": step,
+                    "cfg": to_dict(cfg),
+                    "checkpoint_schema": 2,
+                    "train_state": train_state,
+                },
+                handle,
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        if numbered:
+            os.link(temporary, path)
+            temporary.unlink()
+        else:
+            os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--resume", default=None)
+    ap.add_argument(
+        "--resume-history",
+        default=None,
+        help="history snapshot bound to --resume; required for formal recovery",
+    )
+    ap.add_argument(
+        "--graceful-stop-file",
+        default=None,
+        help="absolute supervisor-owned sentinel polled at optimizer-step boundaries",
+    )
     ap.add_argument("--warm-start", default=None,
                     help="load compatible model weights only; use a fresh optimizer and step 0")
     ap.add_argument(
         "--allow-legacy-resume", action="store_true",
         help="resume a checkpoint without sampler state (safe but repeats data; non-bitwise)",
     )
+    ap.add_argument("--full-training-contract")
+    ap.add_argument("--expected-full-training-contract-sha256")
     args = ap.parse_args()
+    cfg = load_config(args.config)
     if args.resume and args.warm_start:
         ap.error("--resume and --warm-start are mutually exclusive")
-    cfg = load_config(args.config)
+    if args.resume_history and not (args.resume or cfg.train.resume):
+        ap.error("--resume-history requires --resume or train.resume")
+    data_contract_verification = bind_full_training_contract(
+        cfg,
+        args.full_training_contract,
+        args.expected_full_training_contract_sha256,
+    )
+    if data_contract_verification is not None:
+        print(json.dumps(data_contract_verification, sort_keys=True))
+    validate_checkpoint_mode(
+        data_contract_verification, args.warm_start, args.allow_legacy_resume
+    )
     resume = args.resume or cfg.train.resume
     if resume and not Path(resume).exists():
         raise FileNotFoundError(f"resume checkpoint does not exist: {resume}")
+    if cfg.train.run_class == "formal" and resume and not args.resume_history:
+        raise ValueError("formal recovery requires --resume-history")
+    if cfg.train.run_class == "formal" and not resume and args.resume_history:
+        raise ValueError("fresh formal training cannot supply --resume-history")
+    graceful_stop_file = (
+        Path(args.graceful_stop_file) if args.graceful_stop_file else None
+    )
+    if graceful_stop_file is not None:
+        if not graceful_stop_file.is_absolute():
+            raise ValueError("--graceful-stop-file must be absolute")
+        if graceful_stop_file.exists():
+            raise ValueError("--graceful-stop-file already exists at startup")
 
     rank, world, local = ddp_setup()
     device = torch.device(f"cuda:{local}" if torch.cuda.is_available() else "cpu")
@@ -186,12 +512,15 @@ def main():
     use_scaler = cfg.train.amp and amp_dtype == torch.float16
     scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
 
-    train_ds, val_ds, train_files, val_files = build_datasets(cfg)
+    train_ds, val_ds, train_files, val_files = build_datasets(
+        cfg, data_contract_verification
+    )
     sampler = ResumableDistributedSampler(
         train_ds, num_replicas=world, rank=rank, shuffle=True, drop_last=True,
         seed=cfg.train.seed,
     )
     train_fingerprint = dataset_fingerprint(train_files)
+    semantics_sha256 = training_semantics_sha256(cfg)
     train_loader = DataLoader(train_ds, batch_size=cfg.train.batch_size, sampler=sampler,
                               num_workers=cfg.train.num_workers, pin_memory=True,
                               drop_last=True, collate_fn=collate_pairs, persistent_workers=cfg.train.num_workers > 0)
@@ -269,6 +598,7 @@ def main():
                 f"new_keys={len(incompatible.missing_keys)} "
                 f"dropped_keys={len(allowed_unexpected)}"
             )
+    resume_history: list[dict] | None = None
     if resume:
         ck = torch.load(resume, map_location=device, weights_only=False)
         core.load_state_dict(ck["model"]); opt.load_state_dict(ck["opt"]); start_step = ck["step"]
@@ -276,6 +606,8 @@ def main():
             scaler.load_state_dict(ck["scaler"])
         state = ck.get("train_state")
         if state is None:
+            if cfg.train.run_class == "formal":
+                raise RuntimeError("formal training cannot resume a legacy checkpoint")
             if not args.allow_legacy_resume:
                 raise RuntimeError(
                     "checkpoint has no sampler state; pass --allow-legacy-resume "
@@ -292,6 +624,8 @@ def main():
                 "batch_size": cfg.train.batch_size,
                 "grad_accum": cfg.train.grad_accum,
                 "train_fingerprint": train_fingerprint,
+                "full_training_data_contract": data_contract_verification,
+                "training_semantics_sha256": semantics_sha256,
             }
             mismatches = {
                 key: (state.get(key), value)
@@ -307,6 +641,12 @@ def main():
                 )
             sampler.set_epoch(epoch)
             sampler.set_start_offset(consumed_local)
+        if args.resume_history:
+            resume_history = _load_resume_history(
+                Path(args.resume_history),
+                start_step=start_step,
+                val_every=cfg.train.val_every,
+            )
         if is_main(rank):
             print(
                 f"resumed from {resume} at step {start_step}; "
@@ -316,10 +656,57 @@ def main():
     out_dir = Path(cfg.train.out_dir)
     if is_main(rank):
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "config.json").write_text(json.dumps(to_dict(cfg), indent=2))
-    history, saved_ckpts = [], []
+        _atomic_write_json(out_dir / "config.json", to_dict(cfg), overwrite=True)
+        history = resume_history if resume_history is not None else []
+        _atomic_write_json(
+            out_dir / "history.json",
+            history,
+            overwrite=resume is not None,
+        )
+    else:
+        history = []
+    saved_ckpts = []
     clip_count_window = 0
     scaler_skips_window = 0
+    stop_requested = False
+    stopped_early = False
+
+    def request_graceful_stop(_signum, _frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    signal.signal(signal.SIGUSR1, request_graceful_stop)
+
+    def publish_checkpoint(checkpoint_step: int) -> None:
+        train_state = {
+            "world_size": world,
+            "train_dataset_size": len(train_ds),
+            "sampler_num_samples": sampler.num_samples,
+            "sampler_seed": cfg.train.seed,
+            "sampler_epoch": epoch,
+            "samples_consumed_per_rank": consumed_local,
+            "batch_size": cfg.train.batch_size,
+            "grad_accum": cfg.train.grad_accum,
+            "train_fingerprint": train_fingerprint,
+            "full_training_data_contract": data_contract_verification,
+            "training_semantics_sha256": semantics_sha256,
+            "crop_resume": "state_consistent_non_bitwise_crop_and_noise",
+        }
+        path = out_dir / f"ckpt_{checkpoint_step}.pt"
+        save_ckpt(path, core, opt, scaler, checkpoint_step, cfg, train_state)
+        save_ckpt(
+            out_dir / "last.ckpt",
+            core,
+            opt,
+            scaler,
+            checkpoint_step,
+            cfg,
+            train_state,
+        )
+        saved_ckpts.append(path)
+        while len(saved_ckpts) > cfg.train.keep_last_k:
+            old = saved_ckpts.pop(0)
+            old.unlink(missing_ok=True)
 
     model.train()
     step = start_step
@@ -328,6 +715,27 @@ def main():
     t0 = time.time()
     data_wait = 0.0  # seconds spent waiting on the dataloader per log window
     while step < cfg.train.max_steps:
+        if graceful_stop_file is not None and graceful_stop_file.exists():
+            stop_requested = True
+        continue_state = torch.tensor(
+            int(not stop_requested),
+            device=device,
+            dtype=torch.int32,
+        )
+        if world > 1:
+            dist.all_reduce(continue_state, op=dist.ReduceOp.MIN)
+        if not continue_state.item():
+            if is_main(rank) and step > 0:
+                numbered = out_dir / f"ckpt_{step}.pt"
+                if not numbered.exists():
+                    publish_checkpoint(step)
+            if world > 1:
+                dist.barrier()
+            stopped_early = True
+            if is_main(rank):
+                print(f"graceful stop completed at optimizer step {step}")
+            break
+
         for g in opt.param_groups:
             g["lr"] = lr_at(step, cfg)
         opt.zero_grad(set_to_none=True)
@@ -420,40 +828,25 @@ def main():
             m = evaluate(model, val_batches, device, cfg, amp_dtype)
             m["step"] = step
             history.append(m)
-            (out_dir / "history.json").write_text(json.dumps(history, indent=2))
+            _atomic_write_json(out_dir / "history.json", history, overwrite=True)
             print(f"  [val] step {step}  loss {m['val_loss']:.4f}  rmsd {m['val_rmsd']:.3f} "
                   f"(no-op {m['noop_rmsd']:.3f})")
             did_val_or_ckpt = True
-        if is_main(rank) and (step % cfg.train.ckpt_every == 0 or step == cfg.train.max_steps):
-            train_state = {
-                "world_size": world,
-                "train_dataset_size": len(train_ds),
-                "sampler_num_samples": sampler.num_samples,
-                "sampler_seed": cfg.train.seed,
-                "sampler_epoch": epoch,
-                "samples_consumed_per_rank": consumed_local,
-                "batch_size": cfg.train.batch_size,
-                "grad_accum": cfg.train.grad_accum,
-                "train_fingerprint": train_fingerprint,
-                "crop_resume": "stochastic_worker_rng_not_bitwise",
-            }
-            p = out_dir / f"ckpt_{step}.pt"
-            save_ckpt(p, core, opt, scaler, step, cfg, train_state)
-            save_ckpt(out_dir / "last.ckpt", core, opt, scaler, step, cfg, train_state)
-            saved_ckpts.append(p)
-            while len(saved_ckpts) > cfg.train.keep_last_k:
-                old = saved_ckpts.pop(0)
-                old.unlink(missing_ok=True)
+        if is_main(rank) and (
+            step % cfg.train.ckpt_every == 0
+            or step == cfg.train.max_steps
+        ):
+            publish_checkpoint(step)
             did_val_or_ckpt = True
         # Exclude validation/checkpoint time from the NEXT it/s window (else the step after a
         # val/ckpt looks artificially slow). Reset the timing baseline here.
         if did_val_or_ckpt:
             t0 = time.time(); data_wait = 0.0
-
     if world > 1:
         dist.barrier(); dist.destroy_process_group()
     if is_main(rank):
         print(f"done. artifacts in {out_dir}")
+    return 75 if stopped_early else 0
 
 
 class _nullctx:
@@ -465,4 +858,4 @@ class _nullctx:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
