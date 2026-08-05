@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -298,6 +299,9 @@ def test_supervisor_accepts_only_a_cross_bound_package_before_host_checks(tmp_pa
         "formal_run_may_start": True,
         "external_or_untouched_access_authorized": False,
     }
+    now = datetime.now(timezone.utc)
+    issued_at = now - timedelta(hours=1)
+    expires_at = now + timedelta(hours=149)
     authorization = tmp_path / "authorization.json"
     authorization.write_text(
         json.dumps(
@@ -306,8 +310,8 @@ def test_supervisor_accepts_only_a_cross_bound_package_before_host_checks(tmp_pa
                 "status": "USER_AUTHORIZED_FORMAL_TRAINING",
                 "formal_training_authorized": True,
                 "authorization_id": "test-auth",
-                "issued_at": "2026-07-26T00:00:00Z",
-                "expires_at": "2026-08-01T06:00:00Z",
+                "issued_at": issued_at.isoformat().replace("+00:00", "Z"),
+                "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
                 "authorized_package_sha256": package_sha,
                 "authorized_package_id": "formal500k-test",
                 "authorized_run_id": run_id,
