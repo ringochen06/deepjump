@@ -1,0 +1,141 @@
+{
+  "adjudication": {
+    "bootstrap_draws": 10000,
+    "delta1_msm_oracle_required": true,
+    "domain_is_outer_statistical_unit": true,
+    "energy_gain_ci95_lower_gt": 0.0,
+    "formal_training_authorized": false,
+    "geometry_domain_mean_one_sided_alpha": 0.05,
+    "geometry_domain_mean_one_sided_ci95_upper_lte": 0.0,
+    "geometry_hard_envelope_all_domain_cell_step_lte": 0.0,
+    "msm_gain_ci95_lower_gt": 0.0,
+    "paired_ci_quantiles": [
+      0.025,
+      0.975
+    ],
+    "result_mode": "independent_recomputation_from_raw_evidence"
+  },
+  "conditional_transition": {
+    "draws_per_start": 16,
+    "guard": {
+      "bond_max_lt_angstrom": 5.5,
+      "bond_mean_gt_angstrom": 3.2,
+      "bond_mean_lt_angstrom": 4.5,
+      "fallback": "exact_source_position_and_vector_per_draw",
+      "report_raw_and_guarded": true
+    },
+    "methods": [
+      "ode_1"
+    ],
+    "msm": {
+      "clusters": 32,
+      "lag_frames": 1,
+      "log_base": 2,
+      "pseudocount": 1e-08,
+      "row_weighting": "shared_observed_origin_counts"
+    },
+    "real_frames_per_cell": 500,
+    "starts_per_cell": 3,
+    "tica": {
+      "components": 4,
+      "crossfit": "next_replica_leave_one_replica_out",
+      "lag_ns": 10,
+      "max_pair_features": 512
+    }
+  },
+  "data_prerequisite": {
+    "fail_status": "DATA_PREREQUISITE_FAILED_NOT_MODEL_FAILURE",
+    "full_training_contract_required": true,
+    "hdf5_readability_required": true,
+    "live_panel_payload_sha256_rehash": true,
+    "panel_domains_must_exist_in_manifest": true,
+    "zero_unresolved_failures": true
+  },
+  "formal_training_authorized": false,
+  "oracle_prerequisite": {
+    "cell_evidence": "reference_transition_rows_plus_noop_model_raw_counts_and_shared_origins",
+    "cells_per_domain": 25,
+    "decision_schema": "deepjump.delta1_msm_oracle.v2",
+    "development_only_producer": true,
+    "domain_is_outer_statistical_unit": true,
+    "raw_schema": "deepjump.delta1_msm_oracle_raw.v1",
+    "source_evaluator": "in_process_conditional_ode1_16draws_to_raw_msm_counts",
+    "source_requires_consumed_development_evaluator": true
+  },
+  "geometry": {
+    "calibration_draws": 10000,
+    "collision_distance_angstrom": 2.5,
+    "derive_h20_from_h100_prefix": true,
+    "guard": {
+      "bond_max_lt_angstrom": 5.5,
+      "bond_mean_gt_angstrom": 3.2,
+      "bond_mean_lt_angstrom": 4.5,
+      "fallback": "exact_current_source_position_and_vector_per_step",
+      "report_raw_and_guarded": true
+    },
+    "horizons": [
+      20,
+      100
+    ],
+    "method": "mean",
+    "real_envelope_alpha": 0.01,
+    "reference_frames_per_cell": 500,
+    "starts_per_cell": 3
+  },
+  "panel": {
+    "cells_per_domain": 25,
+    "phase_domain_counts": {
+      "development": 20,
+      "external": 20,
+      "untouched": 100
+    },
+    "replicas": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "temperatures_kelvin": [
+      320,
+      348,
+      379,
+      413,
+      450
+    ]
+  },
+  "qualification_trust_boundary": "frozen_evaluator_source_and_public_measure_cli;arbitrary_local_python_or_source_modification_out_of_scope",
+  "raw_evidence_schema": "deepjump.contracted_scientific_raw.v1",
+  "state_archive_schema": "deepjump.contracted_scientific_state_archive.v1",
+  "untouched_global_claim": {
+    "condition": "If-None-Match:*",
+    "helper_id": "embedded_obs_sdk_conditional_create_v1",
+    "helper_sha256": "f1411c66d10e3eec0e8ca894f031ca4807bd0c8b2d9195a289983e4cecd8aab8",
+    "obs_endpoint": "https://obs.cn-north-4.myhuaweicloud.com",
+    "obs_sdk_python": "/data/venvs/obs-claim/bin/python",
+    "obs_sdk_version": "3.26.6"
+  },
+  "runtime_feasibility": {
+    "execution_mode": "single_gpu_sequential_domains",
+    "max_projected_seconds_by_phase": {
+      "development": 8400.0,
+      "external": 8400.0,
+      "untouched": 8400.0
+    },
+    "projection_safety_factor": 1.25,
+    "gpu_environment_required": true,
+    "peak_memory_required": true,
+    "probe_source_role": "non_reserved_representative_domains_including_largest_payload",
+    "raw_per_cell_timings_required": true,
+    "raw_schema": "deepjump.contracted_scientific_runtime_raw.v1",
+    "representative_cells_per_domain": 20,
+    "representative_domains": 5,
+    "representative_selection": "train_payload_size_quantiles_0_25_50_75_100_lexical_tiebreak",
+    "required_probe_includes_largest_payload": true,
+    "schema": "deepjump.contracted_scientific_runtime_feasibility.v1",
+    "status": "PASS_CONTRACTED_SCIENTIFIC_RUNTIME_FEASIBILITY",
+    "workload": "five_non_reserved_domains_20_cells_each_conditional16_and_guarded_h100"
+  },
+  "schema": "deepjump.contracted_scientific_protocol.v1",
+  "seed": 20260723
+}

@@ -32,6 +32,7 @@ model:
   input_aug_sigma: 0.0
 
 train:
+  run_class: formal
   batch_size: 2                      # per GPU
   grad_accum: 8                      # 2 * 8 GPUs * 8 = effective 128
   lr: 5.0e-3

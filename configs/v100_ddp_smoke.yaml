@@ -32,6 +32,7 @@ model:
   input_aug_sigma: 0.0
 
 train:
+  run_class: full_data_stage
   batch_size: 16          # per GPU; identical to v100_paper_d1 (measured 9.7 GB alloc / 10.6 GB reserved)
   grad_accum: 1           # 16 * 8 GPUs * 1 = effective 128
   lr: 5.0e-3

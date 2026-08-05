@@ -19,6 +19,7 @@ import hashlib
 import json
 import math
 import os
+import stat
 import time
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Subset
 
 from deepjump.config import load_config, to_dict
+from deepjump.data_contract import verify_full_training_data_contract
 from deepjump.data import (
     MdcathPairDataset,
     ResumableDistributedSampler,
@@ -56,26 +58,193 @@ def is_main(rank):
     return rank == 0
 
 
-def load_manifest(cfg):
+def _read_verified_artifact(path, expected_sha256, label):
+    """Read and hash one opened regular inode so verification and parsing share bytes."""
+    path = Path(path).expanduser()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"cannot open contracted {label} as a regular non-symlink file: {path}") from exc
+    with os.fdopen(descriptor, "rb") as handle:
+        before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"contracted {label} is not a regular file: {path}")
+        raw = handle.read()
+        after = os.fstat(handle.fileno())
+    identity = lambda value: (
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+    if identity(before) != identity(after) or len(raw) != before.st_size:
+        raise ValueError(f"contracted {label} changed while it was being read: {path}")
+    actual_sha256 = hashlib.sha256(raw).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"contracted {label} SHA256 mismatch: {actual_sha256} != {expected_sha256}"
+        )
+    return raw
+
+
+def load_manifest(cfg, data_contract_verification=None):
     if cfg.data.manifest:
+        if cfg.data.full_training_contract:
+            if data_contract_verification is None:
+                raise ValueError("contracted dataset construction requires a verified contract report")
+            raw = _read_verified_artifact(
+                cfg.data.manifest,
+                data_contract_verification["manifest_sha256"],
+                "manifest",
+            )
+            return json.loads(raw.decode("utf-8"))
         return json.loads(Path(cfg.data.manifest).expanduser().read_text())
     return None
 
 
-def build_datasets(cfg):
+def bind_full_training_contract(cfg, cli_contract=None, cli_contract_sha256=None):
+    """Bind and verify the data identity before any distributed process group exists."""
+    if bool(cli_contract) != bool(cli_contract_sha256):
+        raise ValueError(
+            "--full-training-contract and --expected-full-training-contract-sha256 "
+            "must be set together"
+        )
+    if cli_contract:
+        if cfg.data.full_training_contract and (
+            Path(cfg.data.full_training_contract).expanduser().resolve()
+            != Path(cli_contract).expanduser().resolve()
+        ):
+            raise ValueError("CLI full training contract differs from the config")
+        if (
+            cfg.data.full_training_contract_sha256
+            and cfg.data.full_training_contract_sha256 != cli_contract_sha256
+        ):
+            raise ValueError("CLI full training contract SHA256 differs from the config")
+        cfg.data.full_training_contract = cli_contract
+        cfg.data.full_training_contract_sha256 = cli_contract_sha256
+
+    if cfg.train.run_class not in {"development", "full_data_stage", "formal"}:
+        raise ValueError(
+            "train.run_class must be 'development', 'full_data_stage', or 'formal'"
+        )
+    if cfg.train.max_steps >= 100_000 and cfg.train.run_class != "formal":
+        raise ValueError("runs of 100,000 steps or more must use train.run_class=formal")
+    has_contract_path = bool(cfg.data.full_training_contract)
+    has_contract_sha = bool(cfg.data.full_training_contract_sha256)
+    if has_contract_path != has_contract_sha:
+        raise ValueError(
+            "data.full_training_contract and data.full_training_contract_sha256 "
+            "must be set together"
+        )
+    if cfg.train.run_class != "development" and not has_contract_path:
+        raise ValueError(
+            "full-data stages and formal training require a sealed full training data contract"
+        )
+    if not has_contract_path:
+        return None
+    if not cfg.data.manifest or not cfg.data.domains_file:
+        raise ValueError(
+            "a full training contract requires data.manifest and data.domains_file"
+        )
+    return verify_full_training_data_contract(
+        cfg.data.full_training_contract,
+        cfg.data.full_training_contract_sha256,
+        configured_root=cfg.data.root,
+        configured_manifest=cfg.data.manifest,
+        configured_domains_file=cfg.data.domains_file,
+    )
+
+
+def validate_checkpoint_mode(data_contract_verification, warm_start, allow_legacy_resume):
+    if data_contract_verification is None:
+        return
+    if warm_start:
+        raise ValueError("contracted full-data runs cannot warm-start from prior weights")
+    if allow_legacy_resume:
+        raise ValueError("contracted full-data runs cannot allow legacy resume")
+
+
+def training_semantics_sha256(cfg) -> str:
+    """Hash every resume-sensitive setting while allowing only operational cadence drift."""
+    payload = to_dict(cfg)
+    train_payload = payload["train"]
+    train_payload["effective_lr_horizon_steps"] = (
+        train_payload["lr_horizon_steps"] or train_payload["max_steps"]
+    )
+    for field in (
+        "out_dir",
+        "log_every",
+        "val_every",
+        "ckpt_every",
+        "keep_last_k",
+        "max_steps",
+        "resume",
+        "num_workers",
+    ):
+        train_payload.pop(field)
+    return hashlib.sha256(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    ).hexdigest()
+
+
+def _stat_fingerprint(path: Path) -> dict[str, int]:
+    stat_result = path.stat()
+    return {
+        "device": stat_result.st_dev,
+        "inode": stat_result.st_ino,
+        "size": stat_result.st_size,
+        "mtime_ns": stat_result.st_mtime_ns,
+        "ctime_ns": stat_result.st_ctime_ns,
+    }
+
+
+def build_datasets(cfg, data_contract_verification=None):
     """Split domains into train/val (by file, so val domains are unseen)."""
-    manifest = load_manifest(cfg)
+    manifest = load_manifest(cfg, data_contract_verification)
     if manifest is not None:
         files = [Path(cfg.data.root).expanduser() / "data" / e["file"] for e in manifest]
-        # fall back to any layout: resolve names against root recursively if needed
-        if not files or not files[0].exists():
+        if cfg.data.full_training_contract:
+            for entry, path in zip(manifest, files, strict=True):
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError(f"contracted manifest file is missing or not regular: {path}")
+                if _stat_fingerprint(path) != entry.get("local_fingerprint"):
+                    raise ValueError(f"contracted manifest file fingerprint mismatch: {path}")
+        # Development-only fallback supports legacy layouts without weakening a
+        # contracted full-data run's exact-root identity.
+        elif not files or not files[0].exists():
             found = {f.name: f for f in discover_domains(cfg.data.root)}
             files = [found[e["file"]] for e in manifest if e["file"] in found]
     else:
         files = discover_domains(cfg.data.root)
-    if cfg.data.domains:
-        wanted = set(cfg.data.domains)
+    if cfg.data.domains and cfg.data.domains_file:
+        raise ValueError("data.domains and data.domains_file are mutually exclusive")
+    configured_domains = cfg.data.domains
+    if cfg.data.domains_file:
+        if cfg.data.full_training_contract:
+            raw = _read_verified_artifact(
+                cfg.data.domains_file,
+                data_contract_verification["train_list_sha256"],
+                "train list",
+            )
+            configured_domains = raw.decode("utf-8").splitlines()
+        else:
+            domain_path = Path(cfg.data.domains_file).expanduser()
+            configured_domains = domain_path.read_text(encoding="utf-8").splitlines()
+        if not configured_domains or len(configured_domains) != len(set(configured_domains)):
+            raise ValueError("data.domains_file must contain unique non-empty domains")
+    if configured_domains:
+        wanted = set(configured_domains)
         files = [f for f in files if f.stem.replace("mdcath_dataset_", "") in wanted]
+        found_domains = {f.stem.replace("mdcath_dataset_", "") for f in files}
+        missing = sorted(wanted - found_domains)
+        if missing:
+            raise ValueError(f"configured domains are missing from the data root: {missing[:10]}")
+    if not cfg.data.full_training_contract and len(files) > 1_000:
+        raise ValueError(
+            "training more than 1,000 domains requires a sealed full training data contract"
+        )
     if not files:
         raise SystemExit(f"no mdCATH files under {cfg.data.root}")
     train_files, val_files = split_domains(files, cfg.data.val_fraction, cfg.data.seed)
@@ -171,10 +340,22 @@ def main():
         "--allow-legacy-resume", action="store_true",
         help="resume a checkpoint without sampler state (safe but repeats data; non-bitwise)",
     )
+    ap.add_argument("--full-training-contract")
+    ap.add_argument("--expected-full-training-contract-sha256")
     args = ap.parse_args()
     if args.resume and args.warm_start:
         ap.error("--resume and --warm-start are mutually exclusive")
     cfg = load_config(args.config)
+    data_contract_verification = bind_full_training_contract(
+        cfg,
+        args.full_training_contract,
+        args.expected_full_training_contract_sha256,
+    )
+    if data_contract_verification is not None:
+        print(json.dumps(data_contract_verification, sort_keys=True))
+    validate_checkpoint_mode(
+        data_contract_verification, args.warm_start, args.allow_legacy_resume
+    )
     resume = args.resume or cfg.train.resume
     if resume and not Path(resume).exists():
         raise FileNotFoundError(f"resume checkpoint does not exist: {resume}")
@@ -186,12 +367,15 @@ def main():
     use_scaler = cfg.train.amp and amp_dtype == torch.float16
     scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
 
-    train_ds, val_ds, train_files, val_files = build_datasets(cfg)
+    train_ds, val_ds, train_files, val_files = build_datasets(
+        cfg, data_contract_verification
+    )
     sampler = ResumableDistributedSampler(
         train_ds, num_replicas=world, rank=rank, shuffle=True, drop_last=True,
         seed=cfg.train.seed,
     )
     train_fingerprint = dataset_fingerprint(train_files)
+    semantics_sha256 = training_semantics_sha256(cfg)
     train_loader = DataLoader(train_ds, batch_size=cfg.train.batch_size, sampler=sampler,
                               num_workers=cfg.train.num_workers, pin_memory=True,
                               drop_last=True, collate_fn=collate_pairs, persistent_workers=cfg.train.num_workers > 0)
@@ -276,6 +460,8 @@ def main():
             scaler.load_state_dict(ck["scaler"])
         state = ck.get("train_state")
         if state is None:
+            if cfg.train.run_class == "formal":
+                raise RuntimeError("formal training cannot resume a legacy checkpoint")
             if not args.allow_legacy_resume:
                 raise RuntimeError(
                     "checkpoint has no sampler state; pass --allow-legacy-resume "
@@ -292,6 +478,8 @@ def main():
                 "batch_size": cfg.train.batch_size,
                 "grad_accum": cfg.train.grad_accum,
                 "train_fingerprint": train_fingerprint,
+                "full_training_data_contract": data_contract_verification,
+                "training_semantics_sha256": semantics_sha256,
             }
             mismatches = {
                 key: (state.get(key), value)
@@ -435,6 +623,8 @@ def main():
                 "batch_size": cfg.train.batch_size,
                 "grad_accum": cfg.train.grad_accum,
                 "train_fingerprint": train_fingerprint,
+                "full_training_data_contract": data_contract_verification,
+                "training_semantics_sha256": semantics_sha256,
                 "crop_resume": "stochastic_worker_rng_not_bitwise",
             }
             p = out_dir / f"ckpt_{step}.pt"

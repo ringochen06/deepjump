@@ -7,7 +7,10 @@ import torch
 import pytest
 
 from scripts.train import fast_dev_gate_errors
-from scripts.verify_obsutil_empty_prefix import prefix_object_count
+from scripts.verify_obsutil_empty_prefix import (
+    prefix_file_inventory,
+    prefix_object_count,
+)
 from deepjump.config import load_config
 from deepjump.training import lr_at
 
@@ -325,6 +328,33 @@ def test_obsutil_prefix_count_rejects_incomplete_or_unknown_output(report):
 def test_obsutil_prefix_count_rejects_malformed_count_lines(report):
     with pytest.raises(ValueError, match="malformed count line"):
         prefix_object_count(report)
+
+
+def test_obsutil_prefix_file_inventory_parses_unpaginated_raw_listing():
+    report = (
+        "Total size of prefix [run/corpus/]: 3613998101757B\n"
+        "Folder number: 1\n"
+        "File number: 5398\n"
+    )
+    assert prefix_file_inventory(report) == (5398, 3613998101757)
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        "Next marker: run/corpus/file.h5\nFile number: 999\n",
+        "File number: 5398\n",
+        "Total size of prefix [run/corpus/]: 1B\n",
+        "File number: 5398\nFile number: 5398\n"
+        "Total size of prefix [run/corpus/]: 1B\n",
+        "File number: 5398 files\n"
+        "Total size of prefix [run/corpus/]: 1B\n",
+        "File number: 5398\nTotal size of prefix [run/corpus/]: 1 bytes\n",
+    ],
+)
+def test_obsutil_prefix_file_inventory_rejects_incomplete_or_paginated_output(report):
+    with pytest.raises(ValueError, match="inventory|paginated|malformed"):
+        prefix_file_inventory(report)
 
 
 def _write_checkpoint(

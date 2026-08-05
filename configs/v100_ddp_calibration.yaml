@@ -29,6 +29,7 @@ model:
   input_aug_sigma: 0.0
 
 train:
+  run_class: full_data_stage
   batch_size: 16
   grad_accum: 1
   lr: 5.0e-3

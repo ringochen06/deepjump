@@ -18,6 +18,8 @@ yields exactly numProteinAtoms names in coords order (verified: resid/resname ma
 from __future__ import annotations
 
 import glob
+import os
+import stat
 from pathlib import Path
 
 import h5py
@@ -76,16 +78,68 @@ def parse_protein_atom_names(psf_str: str, expected_n: int) -> list[str]:
 class _DomainHandle:
     """Lazily-opened h5 file + cached topology layout for one domain."""
 
-    def __init__(self, path: Path):
+    def __init__(
+        self,
+        path: Path,
+        expected_fingerprint: dict[str, int] | None = None,
+        *,
+        descriptor: int | None = None,
+    ):
         self.path = path
         self.name = path.stem.replace("mdcath_dataset_", "")
+        self.expected_fingerprint = expected_fingerprint
+        self.descriptor = descriptor
         self._f: h5py.File | None = None
+        self._raw_file = None
         self._layout = None
+
+    @staticmethod
+    def _fingerprint(value: os.stat_result) -> dict[str, int]:
+        return {
+            "device": value.st_dev,
+            "inode": value.st_ino,
+            "size": value.st_size,
+            "mtime_ns": value.st_mtime_ns,
+            "ctime_ns": value.st_ctime_ns,
+        }
 
     @property
     def f(self) -> h5py.File:
         if self._f is None:
-            self._f = h5py.File(self.path, "r")
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                descriptor = (
+                    os.dup(self.descriptor)
+                    if self.descriptor is not None
+                    else os.open(self.path, flags)
+                )
+            except OSError as exc:
+                raise ValueError(
+                    f"mdCATH payload must be a regular non-symlink file: {self.path}"
+                ) from exc
+            raw_file = os.fdopen(descriptor, "rb")
+            try:
+                before = os.fstat(raw_file.fileno())
+                if not stat.S_ISREG(before.st_mode):
+                    raise ValueError(f"mdCATH payload is not a regular file: {self.path}")
+                fingerprint = self._fingerprint(before)
+                if (
+                    self.expected_fingerprint is not None
+                    and fingerprint != self.expected_fingerprint
+                ):
+                    raise ValueError(
+                        f"mdCATH payload fingerprint changed before first open: {self.path}"
+                    )
+                h5_file = h5py.File(raw_file, "r")
+                after = os.fstat(raw_file.fileno())
+                if self._fingerprint(after) != fingerprint:
+                    h5_file.close()
+                    raise ValueError(f"mdCATH payload changed while opening: {self.path}")
+            except Exception:
+                raw_file.close()
+                raise
+            self._raw_file = raw_file
+            self._f = h5_file
         return self._f
 
     @property
@@ -116,12 +170,23 @@ class _DomainHandle:
         return out
 
     def coords(self, temperature: int, replica: int, frame: int) -> np.ndarray:
-        return self.dom[str(temperature)][str(replica)]["coords"][frame]
+        coords = np.asarray(
+            self.dom[str(temperature)][str(replica)]["coords"][frame]
+        )
+        if not np.issubdtype(coords.dtype, np.number) or not np.isfinite(coords).all():
+            raise ValueError(
+                "mdCATH coordinates must be numeric and finite: "
+                f"{self.path} temp={temperature} replica={replica} frame={frame}"
+            )
+        return coords
 
     def close(self):
         if self._f is not None:
             self._f.close()
             self._f = None
+        if self._raw_file is not None:
+            self._raw_file.close()
+            self._raw_file = None
 
 
 class MdcathPairDataset(Dataset):
@@ -166,6 +231,14 @@ class MdcathPairDataset(Dataset):
         self._rng_worker_id: int | None = None
         self._cache: dict[int, _DomainHandle] = {}  # per-worker lazy handle cache
         self._order: list[int] = []  # LRU order of file indices
+        self._expected_fingerprints: dict[str, dict[str, int]] = {}
+        if manifest is not None:
+            for entry in manifest:
+                fingerprint = entry.get("local_fingerprint")
+                if fingerprint is not None:
+                    self._expected_fingerprints[Path(entry["file"]).name] = dict(
+                        fingerprint
+                    )
 
         traj_frames = self._trajectory_frames(manifest)  # {(file_idx,temp,rep): num_frames}
         self._traj: list[tuple[int, int, int, int]] = []  # (file_idx, temp, rep, delta)
@@ -220,7 +293,10 @@ class MdcathPairDataset(Dataset):
     def _get_handle(self, file_idx: int) -> _DomainHandle:
         h = self._cache.get(file_idx)
         if h is None:
-            h = _DomainHandle(self.files[file_idx])
+            path = self.files[file_idx]
+            h = _DomainHandle(
+                path, self._expected_fingerprints.get(path.name)
+            )
             self._cache[file_idx] = h
             self._order.append(file_idx)
             while len(self._order) > self.max_open_files:  # LRU eviction (ulimit-safe)

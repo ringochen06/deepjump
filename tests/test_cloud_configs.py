@@ -13,7 +13,9 @@ def test_v100_stage_configs_share_training_footprint():
     assert asdict(smoke.data) == asdict(calibration.data) == asdict(formal.data)
     assert asdict(smoke.model) == asdict(calibration.model) == asdict(formal.model)
 
-    scheduling_fields = {"max_steps", "val_every", "log_every", "ckpt_every", "out_dir"}
+    scheduling_fields = {
+        "run_class", "max_steps", "val_every", "log_every", "ckpt_every", "out_dir"
+    }
     for config in (smoke, calibration):
         staged = asdict(config.train)
         reference = asdict(formal.train)

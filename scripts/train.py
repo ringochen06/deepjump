@@ -25,11 +25,35 @@ from deepjump.training import total_loss
 from deepjump.utils import move_batch, resolve_device, split_domains
 
 
+def validate_single_process_scope(cfg):
+    """Keep the legacy single-process trainer development-only and fail closed."""
+    if cfg.train.run_class != "development":
+        raise ValueError(
+            "scripts/train.py is development-only; use scripts/train_ddp.py for "
+            "full-data stages or formal training"
+        )
+    if (
+        cfg.data.full_training_contract
+        or cfg.data.full_training_contract_sha256
+        or cfg.data.domains_file
+    ):
+        raise ValueError(
+            "scripts/train.py does not consume full-data contracts or sealed domains files"
+        )
+    if cfg.train.max_steps >= 100_000:
+        raise ValueError("scripts/train.py cannot run 100,000 steps or more")
+
+
 def build_loaders(cfg):
     files = discover_domains(cfg.data.root)
     if cfg.data.domains:
         wanted = set(cfg.data.domains)
         files = [f for f in files if f.stem.replace("mdcath_dataset_", "") in wanted]
+    if len(files) > 1_000:
+        raise ValueError(
+            "scripts/train.py cannot train more than 1,000 domains; "
+            "use the contracted DDP entrypoint"
+        )
     if not files:
         raise SystemExit(f"no mdCATH files under {cfg.data.root}; run download_mdcath.py")
     train_files, val_files = split_domains(files, cfg.data.val_fraction, cfg.data.seed)
@@ -146,6 +170,7 @@ def main():
         cfg.train.max_steps = args.max_steps
     if args.lr is not None:
         cfg.train.lr = args.lr
+    validate_single_process_scope(cfg)
     torch.manual_seed(cfg.train.seed)
     device = resolve_device(cfg.train.device)
     print(f"device: {device}")

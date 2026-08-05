@@ -389,8 +389,12 @@ def _mechanism_probe(
     delta: int,
     canon_symmetric: bool,
     device: torch.device,
+    domain_name: str | None = None,
+    descriptor: int | None = None,
 ) -> dict:
-    handle = _DomainHandle(path)
+    handle = _DomainHandle(path, descriptor=descriptor)
+    if domain_name is not None:
+        handle.name = domain_name
     try:
         layout = handle.layout
         source_P, source_V, _, _, starts = _cell_tensors(

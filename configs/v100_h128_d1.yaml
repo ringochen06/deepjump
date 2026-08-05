@@ -30,6 +30,7 @@ model:
   input_aug_sigma: 0.0
 
 train:
+  run_class: formal
   batch_size: 1             # per GPU (16 GB); bump to 2 + halve grad_accum if it fits
   grad_accum: 16            # 1 * 8 * 16 = effective 128
   lr: 5.0e-3
