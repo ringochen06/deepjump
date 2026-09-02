@@ -22,11 +22,66 @@ evaluation — with clearly marked boundaries and honest negative results.*
   progressively by a geometry gate, input-augmentation, and k-step unrolled training;
   (2) distributional fidelity is a **scale problem** — TICA JSD closes 0.564 → 0.347 (floor 0.287)
   as we scale H=32 → 128 and 30 → 200 domains.
+  **[SUPERSEDED — see §0a.** Those JSD values came from a metric that rewarded
+  divergence, and a formal 5,218-domain / 500k-step run has since removed scale
+  as the explanation.**]**
 - **Out of reach (data/scale, not code):** the paper's fast-folder headline results
   (WW/NTL9/Lambda folding, stationary ΔG, MFPT) need DESRES trajectories and a stable ×10⁵-step
   rollout we do not have.
 
 ![summary](docs/summary.png)
+
+---
+
+## 0a. Correction notice — 2026-09-02
+
+**Two defects invalidate the distributional results below.** The narrative is kept
+as written because the reasoning path is itself evidence; every superseded claim
+is flagged inline and resolved here. Full analysis:
+[`docs/FINDING_sampler_root_cause_20260902.md`](docs/FINDING_sampler_root_cause_20260902.md).
+
+**Defect 1 — the sampler corrupted V's zero-padded atom slots.** `V` is
+`[N, 13, 3]` and residues carry different heavy-atom counts, so 283 of 650 slots
+on mdCATH `1a92A00` must stay exactly zero. The endpoint ODE wrote into every
+slot; the garbage re-entered the conditioner as an input training never produced
+and compounded — padded-slot magnitude reached `3.1e1` at 20 Euler steps and
+`3.2e3` at 150, taking the real coordinates with it (CA-CA bond 3.8 → 40.8 Å).
+`project_v_atom_mask` already implemented the per-step re-masking the first-party
+release performs, but defaulted **off**. It now defaults on (commit `5361710`).
+
+**Defect 2 — the TICA JSD rewarded divergence.** `hist2d_jsd` sized its histogram
+to the *union* of the reference and model samples. A diverging model stretched
+the extent until real MD occupied one or two bins, so the JSD *fell*. Measured on
+synthetic data with the old rule: a correct model scores 0.174, while a wrong
+model with 20 of 400 samples pushed to ~100 scores 0.156 and one with 5 samples
+at ~1000 scores 0.004 — **better than sampling the reference distribution
+exactly**. The grid is now fixed by the reference alone and stray samples are
+clipped into edge bins, so leaving the reference's support costs mass instead of
+enlarging the grid.
+
+**Consequence: every JSD figure in §4.5 and §4.6 is void.** The apparent
+"scale ladder" (0.564 → 0.347) partly tracked how far each model diverged, not
+how faithful it was. Re-measured on the formal 500k checkpoint with both defects
+fixed, four held-out domains, same checkpoint and domains, only the sampler
+differing:
+
+| domain | pre-fix sampler | fixed sampler |
+|---|---:|---:|
+| 1ce3A00 | 0.64 | **0.51** |
+| 1vq8P01 | 0.63 | **0.54** |
+| 1zhsA01 | 0.67 | **0.58** |
+| 3udcA02 | 0.60 | **0.45** |
+
+The fix wins on every domain. It does not make the model good: 0.45–0.58 means
+the ensemble covers roughly the right region without reproducing real MD's basin
+structure. What the fix buys is a measurement that is no longer inverted.
+
+**Also stale below:** §6 describes this work as "≤200 domains, MPS laptop, ≤60k
+steps". A formal run has since completed on 8 GPUs at 5,218 domains and 500,000
+steps, matching the paper's printed recipe on width, depth, LR schedule, crop,
+effective batch and loss. **Scale is therefore no longer the explanation for the
+distributional gap**, which retires the §4.5/§5.4 conclusion and the first item
+of §7. §8 says `pytest -q # 14/14`; the suite is now 331 tests.
 
 ---
 
@@ -213,6 +268,12 @@ step extends stability, 3-step keeps the *ungated* rollout physical over the ful
 
 ### 4.5 Distributional fidelity (TICA) — the second research crux
 
+> **[SUPERSEDED — see §0a.]** Every JSD number in this section is void: the
+> metric sized its histogram to the union of reference and model, so a
+> diverging model scored *better*. The claim that conditional sampling is
+> "geometrically stable" is also wrong — measured CA-CA bond breaks by 50
+> Euler steps (3.8 -> 6.5 A).
+
 The correct metric is distributional, not single-step. `tica_eval.py` fits TICA on a real
 trajectory's SE(3)-invariant Cα-pairwise features, projects a model ensemble and real MD into TIC
 space, and compares via 2D-histogram JSD. The **DeepJump-native ensemble** is `--gen conditional`:
@@ -239,6 +300,13 @@ now data **diversity** (more domains), not training **time**.
 
 ### 4.6 Paper-style TICA panel figure — `scripts/tica_panel.py`
 
+> **[REGENERATED 2026-09-02 — see §0a.]** The figure below is now the formal
+> 500k checkpoint under the fixed sampler and fixed metric (JSD 0.45-0.58 on
+> four held-out domains). The pre-fix control is
+> `docs/tica_panel_prefix_control.png` (0.60-0.67). The superseded reading
+> "JSD 0.24-0.32" below described the old figure, whose shared binning was
+> stretched by diverged samples until real MD rendered as a single blob.
+
 ![tica panel](docs/tica_panel.png)
 
 Reproduces the *layout* of the paper's equilibrium-ensemble figure: per held-out domain, one row of
@@ -259,9 +327,11 @@ and no folding (see §6).
    RMSD vs no-op is a **weak** signal; DeepJump is judged distributionally.
 3. **Naive rollout is unstable; three fixes help** (§4.4). Deeper unrolling is the real horizon cure;
    +gate holds it fully bounded — but even the stable rollout under-explores distributionally.
-4. **Distributional fidelity is largely a scale problem** (§4.5): JSD 0.564 → 0.347 (floor 0.287) as
-   H and domain-count grow — the paper's recipe (bigger H, more domains) rather than architecture.
-   We are still at ~8 % of the paper's training budget.
+4. ~~**Distributional fidelity is largely a scale problem** (§4.5)~~ **[RETRACTED — see §0a.]**
+   The supporting JSD values came from a metric that rewarded divergence, and the
+   formal 500k run has since matched the paper's recipe on domains, steps, width,
+   depth, LR schedule, crop, batch and loss without closing the gap. Scale is not
+   the explanation.
 5. **Larger δ = bigger, harder jump**, but sub-linear displacement — the basis of MD acceleration.
 6. **Faithful components all train cleanly** (25 Å all-atom loss, multi-scale δ, symmetric-sidechain
    canonicalization, H-scaling) — drop-in steps toward the full method.
@@ -274,7 +344,7 @@ and no folding (see §6).
 |---|---|---|
 | generative model | SDE / two-sided stochastic interpolant (EquiJump) | ODE, x₁-prediction (AlphaFlow) — simplified |
 | equivariance | e3nn spherical-harmonic tensor products (up to l=2) | hand-rolled GVP/EGNN (l=1), MPS-friendly |
-| scale | H≤128, **5398** domains, 4×A6000, **500k** steps | H≤128, **≤200** domains, MPS laptop, ≤60k steps |
+| scale | H≤128, **5398** domains, 4×A6000, **500k** steps | H≤128, **5218** domains, 8 GPUs, **500k** steps (read "≤200 domains, MPS laptop, ≤60k steps" before the formal run; see §0a) |
 | loss | 25 Å all-atom Vector-Map | Cα-pairwise + heavy-offset (+ optional 25 Å all-atom) |
 | eval data | DESRES fast folders (WW, NTL9, Lambda, …) | held-out **mdCATH** domains only |
 
@@ -288,8 +358,12 @@ RMSD/FNC time series, structure overlays) in miniature.
 
 ## 7. Limitations & next steps
 
-- **Close the distributional gap** (main open item): continued scale toward the paper's regime;
-  and/or deeper unrolling, energy-based MH acceptance, or an SDE / two-sided interpolant (EquiJump).
+- **Close the distributional gap** (main open item): ~~continued scale toward the paper's regime~~
+  (**retired — the formal 500k run reached that regime, see §0a**); deeper unrolling,
+  energy-based MH acceptance, or an SDE / two-sided interpolant (EquiJump). The
+  untested first-party source law (`var_coords=1.5`, `var_features=1.0`) is the
+  cheapest remaining lever — `configs/v100_tensorcloud01_full_d1_first_party_source_law1000.yaml`
+  encodes it and has never been run.
 - **l=2 symmetric-sidechain encoding** (needs e3nn or a hand-rolled l=2 path).
 - **δ=100 ns**, **MSM kinetics / fast-folder metrics** (need DESRES data).
 
@@ -314,7 +388,7 @@ python scripts/tica_eval.py    --ckpt runs/faithful_scaled/last.ckpt           #
 python scripts/tica_panel.py   --ckpt runs/faithful_scaled/last.ckpt --n 4     # docs/tica_panel.png
 python scripts/plot_summary.py && python scripts/plot_stability.py             # docs/*.png
 
-pytest -q                                                                      # 14/14
+pytest -q                                                                      # 331 tests
 ```
 
 ## Appendix — repository map

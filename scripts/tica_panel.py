@@ -17,6 +17,7 @@ marked with a dashed line.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 from pathlib import Path
 
 import matplotlib
@@ -57,10 +58,23 @@ def fit_tica(feats, lag=1, n=2):
 
 
 def hist2d_jsd(a, b, rng, bins=24):
-    Ha, _, _ = np.histogram2d(a[:, 0], a[:, 1], bins=bins, range=rng, density=True)
-    Hb, _, _ = np.histogram2d(b[:, 0], b[:, 1], bins=bins, range=rng, density=True)
-    pa = Ha.ravel() + 1e-9; pa /= pa.sum()
-    pb = Hb.ravel() + 1e-9; pb /= pb.sum()
+    """JSD on a grid the caller fixes from the reference; strays are clipped in.
+
+    The grid must not be sized to the union of both samples: a diverging model
+    would stretch the extent, collapse the reference into a couple of bins, and
+    drive the JSD down. See scripts/tica_eval.py:reference_range.
+    """
+    edges = [np.linspace(rng[0][0], rng[0][1], bins + 1),
+             np.linspace(rng[1][0], rng[1][1], bins + 1)]
+
+    def density(sample):
+        clipped = np.stack([np.clip(sample[:, 0], edges[0][0], edges[0][-1]),
+                            np.clip(sample[:, 1], edges[1][0], edges[1][-1])], axis=1)
+        H, _, _ = np.histogram2d(clipped[:, 0], clipped[:, 1], bins=edges)
+        p = H.ravel() + 1e-9
+        return p / p.sum()
+
+    pa, pb = density(a), density(b)
     m = 0.5 * (pa + pb)
     kl = lambda p, q: np.sum(p * np.log(p / q))
     return 0.5 * kl(pa, m) + 0.5 * kl(pb, m)
@@ -161,7 +175,8 @@ def draw_marginals(ax_top, ax_bot, real_tic, model_tic, xe, ye):
 
 @torch.no_grad()
 def build_domain(
-    model, handle, temp, rep, device, starts, K, steps, sigma, *, canon_symmetric
+    model, handle, temp, rep, device, starts, K, steps, sigma, *, canon_symmetric,
+    sample_kwargs=None,
 ):
     layout = handle.layout
     N = layout.num_residues
@@ -199,7 +214,8 @@ def build_domain(
                 "residue_mask": torch.ones(1, N, dtype=torch.bool, device=device)}
         for k in range(K):
             gen = torch.Generator().manual_seed(si * 1000 + k)
-            P, _V = model.sample(init, steps=steps, mode="ode", generator=gen)
+            P, _V = model.sample(init, steps=steps, mode="ode", generator=gen,
+                                 **(sample_kwargs or {}))
             Pn = P[0].cpu()
             model_feats.append(pairdist_features(Pn))
             if len(ens_P) < 30:
@@ -221,18 +237,32 @@ def main():
     ap.add_argument("--steps", type=int, default=20)
     ap.add_argument("--sigma", type=float, default=0.1)
     ap.add_argument("--bins", type=int, default=30)
+    ap.add_argument("--root", default=None, help="override the checkpoint's data root")
+    ap.add_argument("--tau-max", type=float, default=1.0,
+                    help="truncate the interpolant before the singular endpoint; <1 needs --terminal-denoise")
+    ap.add_argument("--terminal-denoise", action="store_true",
+                    help="emit one endpoint prediction at tau_max instead of integrating into the singularity")
+    ap.add_argument("--integrator", choices=["euler", "heun"], default="euler")
     ap.add_argument("--out", default="docs/tica_panel.png")
     args = ap.parse_args()
 
     ck = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cm, cd = ck["cfg"]["model"], ck["cfg"]["data"]
     device = resolve_device(cd.get("device", "auto"))
-    model = DeepJumpLite(ModelConfig(**cm), noise_sigma=cd["noise_sigma"],
+    # Checkpoints predating the current tree may carry model options ModelConfig no
+    # longer declares. Dropping one silently would change the architecture, so only
+    # falsy unknowns are dropped and the state dict is still loaded strictly.
+    known = {f.name for f in dataclasses.fields(ModelConfig)}
+    for key, value in cm.items():
+        if key not in known and value:
+            raise SystemExit(f"checkpoint sets unknown model option {key}={value!r}")
+    model = DeepJumpLite(ModelConfig(**{k: v for k, v in cm.items() if k in known}),
+                         noise_sigma=cd["noise_sigma"],
                          predict_heavy=cm["predict_heavy"]).to(device)
-    model.load_state_dict(ck["model"]); model.eval()
+    model.load_state_dict(ck["model"], strict=True); model.eval()
     print(f"loaded {args.ckpt}  H={cm['hidden']}  device={device}")
 
-    files = discover_domains(cd["root"])
+    files = discover_domains(args.root or cd["root"])
     if args.domains:
         chosen = [f for f in files if any(d in f.name for d in args.domains)]
     else:
@@ -255,6 +285,9 @@ def main():
             args.steps,
             args.sigma,
             canon_symmetric=bool(cd.get("canon_symmetric", False)),
+            sample_kwargs=dict(integrator=args.integrator,
+                               tau_max=args.tau_max,
+                               terminal_denoise=args.terminal_denoise),
         ))
         h.close()
 
@@ -275,9 +308,10 @@ def main():
         ax_t1 = fig.add_subplot(marg[0, 0])
         ax_t2 = fig.add_subplot(marg[1, 0])
 
-        # shared TIC range across real & model for comparable heatmaps
-        both = np.concatenate([blk["real_tic"], blk["model_tic"]])
-        lo, hi = both.min(0), both.max(0)
+        # TIC range fixed by real MD alone. Including the model would let a
+        # diverging ensemble stretch the axes until real MD occupies one bin,
+        # which both flatters the JSD and renders the reference unreadable.
+        lo, hi = blk["real_tic"].min(0), blk["real_tic"].max(0)
         pad = 0.05 * (hi - lo + 1e-6)
         rng = [[lo[0] - pad[0], hi[0] + pad[0]], [lo[1] - pad[1], hi[1] + pad[1]]]
         jsd = hist2d_jsd(blk["real_tic"], blk["model_tic"], rng, bins=24)

@@ -90,9 +90,51 @@ No explicit argument passed, `tau_max=1.0` (the previously worst case):
 | 50 | 0.000e+00 | 3.89 |
 | 150 | 0.000e+00 | 3.90 |
 
-## What the fix does not buy
+## A second defect, and what the fixes do and do not buy
 
-### `[MEASURED]` Rollout TICA is domain-dependent, not a clean win
+### `[MEASURED]` The TICA JSD rewarded divergence
+
+`hist2d_jsd` sized its 2D histogram to the **union** of the reference and model
+samples. A diverging model stretched the extent until real MD occupied one or two
+bins while the model spread over the rest, and the JSD *fell*. Synthetic
+demonstration with the old rule, 400 samples each:
+
+| model | old JSD | fixed JSD |
+|---|---:|---:|
+| perfect (same law as the reference) | 0.174 | 0.150 |
+| shifted 1.5 sigma (genuinely worse) | 0.423 | 0.444 |
+| shifted, 5 samples out at ~20 | 0.278 | 0.448 |
+| shifted, 20 samples out at ~100 | **0.156** | 0.455 |
+| shifted, 5 samples out at ~1000 | **0.004** | 0.448 |
+
+Under the old rule a wrong, diverging model beat one sampling the reference
+distribution exactly. Fixed by sizing the grid from the reference alone and
+clipping stray samples into the edge bins, so leaving the reference's support
+costs probability mass instead of enlarging the grid.
+
+**This invalidates every JSD number measured before 2026-09-02**, including the
+`REPORT.md` 4.5 scale ladder and the comparisons recorded in the next section as
+originally written.
+
+### `[MEASURED]` Re-measured with both defects fixed, the sampler fix wins everywhere
+
+Formal 500k checkpoint, four held-out domains, conditional stochastic ensemble,
+20 starts x K=4, 50 Euler steps. Same checkpoint and domains throughout; only the
+sampler differs.
+
+| domain | pre-fix sampler | fixed sampler |
+|---|---:|---:|
+| 1ce3A00 | 0.64 | **0.51** |
+| 1vq8P01 | 0.63 | **0.54** |
+| 1zhsA01 | 0.67 | **0.58** |
+| 3udcA02 | 0.60 | **0.45** |
+
+Figures: `docs/tica_panel.png` (fixed) and `docs/tica_panel_prefix_control.png`
+(control). 0.45-0.58 is not a good score -- the ensemble covers roughly the right
+region without reproducing real MD's basin structure -- but the ordering is now
+consistent across every domain tested.
+
+### `[SUPERSEDED]` The earlier domain-dependent reading
 
 `--gen rollout`, 20 starts, 20 steps. Lower is better. A = `mode="mean"` + gate
 (previously hardcoded); C = tau_max 0.9 + terminal denoise + project_v, ode 50.
@@ -102,7 +144,8 @@ No explicit argument passed, `tau_max=1.0` (the previously worst case):
 | 1a92A00 | 0.450 | **0.313** | 0.335 |
 | 1avyB00 | 0.338 | 0.407 | 0.337 |
 
-C wins on one domain and loses on the other. A plausible reason: C explores much
+**These numbers were produced with the broken metric and are retained only to
+document the earlier reading.** C wins on one domain and loses on the other. A plausible reason: C explores much
 further (20-step drift 9-11 A vs mean-mode's 5.0 A), while the no-dynamics
 reference is built from real MD start frames that already tile the landscape. The
 metric therefore penalises any model that moves unless it moves correctly. Note
@@ -177,7 +220,9 @@ if a future sampler stops touching V.
 
 ## Open items
 
-- Regenerate `REPORT.md` 4.5 and `docs/tica_panel.png` with the fixed sampler.
+- ~~Regenerate `REPORT.md` 4.5 and `docs/tica_panel.png` with the fixed sampler.~~
+  Done: `REPORT.md` carries a correction notice (section 0a) with inline flags at
+  each superseded claim, and both panels are regenerated.
 - Move distributional and kinetic evaluations off `mode="mean"`; keep it only for
   deterministic identity checks and say so where it is used.
 - Run the first-party source-law config; it is the only way to test sigma.

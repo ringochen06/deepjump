@@ -53,14 +53,41 @@ def fit_tica(feats, lag=1, n=2):
     return W @ U2[:, idx]  # [D, n]
 
 
-def hist2d_jsd(a, b, bins=24):
-    lo = np.minimum(a.min(0), b.min(0))
-    hi = np.maximum(a.max(0), b.max(0))
-    rng = [[lo[0], hi[0]], [lo[1], hi[1]]]
-    Ha, _, _ = np.histogram2d(a[:, 0], a[:, 1], bins=bins, range=rng, density=True)
-    Hb, _, _ = np.histogram2d(b[:, 0], b[:, 1], bins=bins, range=rng, density=True)
-    pa = Ha.ravel() + 1e-9; pa /= pa.sum()
-    pb = Hb.ravel() + 1e-9; pb /= pb.sum()
+def reference_range(reference, pad_fraction=0.05):
+    """Histogram extent fixed by the reference alone, never by the model.
+
+    Sizing the grid to the union of both samples makes the metric reward
+    divergence: a model whose samples fly off stretches the extent, the fixed bin
+    count then collapses the reference into one or two bins, the model spreads
+    over the rest, and the JSD falls. Measured with the union rule, a correct
+    model scores 0.174 while a wrong model with 20 of 400 samples pushed out to
+    ~100 scores 0.156, and pushing 5 samples to ~1000 scores 0.004.
+    """
+    lo, hi = reference.min(0), reference.max(0)
+    pad = pad_fraction * (hi - lo + 1e-6)
+    return [[lo[0] - pad[0], hi[0] + pad[0]], [lo[1] - pad[1], hi[1] + pad[1]]]
+
+
+def hist2d_jsd(a, b, bins=24, rng=None):
+    """JSD between two TIC samples on a grid the reference `a` defines.
+
+    Model samples outside that grid are clipped into the edge bins, so leaving
+    the reference's support costs probability mass in the wrong place instead of
+    silently enlarging the grid.
+    """
+    if rng is None:
+        rng = reference_range(a)
+    edges = [np.linspace(rng[0][0], rng[0][1], bins + 1),
+             np.linspace(rng[1][0], rng[1][1], bins + 1)]
+
+    def density(sample):
+        clipped = np.stack([np.clip(sample[:, 0], edges[0][0], edges[0][-1]),
+                            np.clip(sample[:, 1], edges[1][0], edges[1][-1])], axis=1)
+        H, _, _ = np.histogram2d(clipped[:, 0], clipped[:, 1], bins=edges)
+        p = H.ravel() + 1e-9
+        return p / p.sum()
+
+    pa, pb = density(a), density(b)
     m = 0.5 * (pa + pb)
     kl = lambda p, q: np.sum(p * np.log(p / q))
     return 0.5 * kl(pa, m) + 0.5 * kl(pb, m)
