@@ -12,6 +12,7 @@ whether the model *samples the right conformational landscape*, not single-frame
 from __future__ import annotations
 
 import argparse
+import dataclasses
 from pathlib import Path
 
 import matplotlib
@@ -75,19 +76,42 @@ def main():
     ap.add_argument("--K", type=int, default=5, help="stochastic draws per start (conditional)")
     ap.add_argument("--sigma", type=float, default=None, help="override tau=0 noise sigma")
     ap.add_argument("--steps", type=int, default=20)
+    ap.add_argument("--ode-steps", type=int, default=None,
+                    help="ODE integration steps for a conditional jump (default: --steps)")
+    ap.add_argument("--tau-max", type=float, default=1.0,
+                    help="truncate the interpolant before the singular endpoint; <1 needs --terminal-denoise")
+    ap.add_argument("--terminal-denoise", action="store_true",
+                    help="emit one endpoint prediction at tau_max instead of integrating into the singularity")
+    ap.add_argument("--project-v", action=argparse.BooleanOptionalAction, default=True,
+                    help="re-mask V every ODE step (default on; --no-project-v reproduces "
+                         "the pre-fix sampler, which pollutes V's zero-padded slots)")
+    ap.add_argument("--integrator", choices=["euler", "heun"], default="euler")
+    ap.add_argument("--rollout-mode", choices=["ode", "mean"], default="ode",
+                    help="sampler used per chained jump when --gen rollout; mean has zero spread")
+    ap.add_argument("--gate", action="store_true",
+                    help="geometry acceptance gate during --gen rollout")
     ap.add_argument("--lag", type=int, default=1)
     ap.add_argument("--domain", default=None, help="evaluate on this domain id (for fair cross-model compare)")
+    ap.add_argument("--root", default=None, help="override the checkpoint's data root (e.g. a cloud path)")
     ap.add_argument("--out", default="docs/tica.png")
     args = ap.parse_args()
 
     ck = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cm, cd = ck["cfg"]["model"], ck["cfg"]["data"]
     device = resolve_device(cd["device"] if "device" in cd else "auto")
-    model = DeepJumpLite(ModelConfig(**cm), noise_sigma=cd["noise_sigma"],
+    # Checkpoints predating the current tree may carry model options ModelConfig no
+    # longer declares. Dropping one silently would change the architecture, so only
+    # falsy unknowns are dropped and the state dict is still loaded strictly.
+    known = {f.name for f in dataclasses.fields(ModelConfig)}
+    for key, value in cm.items():
+        if key not in known and value:
+            raise SystemExit(f"checkpoint sets unknown model option {key}={value!r}")
+    model = DeepJumpLite(ModelConfig(**{k: v for k, v in cm.items() if k in known}),
+                         noise_sigma=cd["noise_sigma"],
                          predict_heavy=cm["predict_heavy"]).to(device)
-    model.load_state_dict(ck["model"]); model.eval()
+    model.load_state_dict(ck["model"], strict=True); model.eval()
 
-    files = discover_domains(cd["root"])
+    files = discover_domains(args.root or cd["root"])
     if args.domain:
         match = [f for f in files if args.domain in f.name]
         if not match:
@@ -115,11 +139,17 @@ def main():
     real_tic = (real_feats - real_feats.mean(0)) @ proj
 
     # model ensemble. conditional (default): DeepJump-native diversity = K stochastic ODE
-    # single-jumps of X_{t+delta} per start frame (different tau=0 noise eps each). A single jump
-    # is geometrically stable (only rollout compounding explodes), so this populates the model's
-    # p(X_{t+delta}|X_t) aggregated over the trajectory -- the right distributional test.
+    # single-jumps of X_{t+delta} per start frame (different tau=0 noise eps each), which
+    # populates p(X_{t+delta}|X_t) aggregated over the trajectory -- the right distributional test.
+    #
+    # A single jump is NOT unconditionally stable: with tau_max=1 and no V re-masking, measured
+    # CA-CA bond stays physical to ~30 Euler steps and blows up by 50 (3.8 -> 6.5 A) because the
+    # Euler update writes nonzero values into V's zero-padded atom slots, which training never
+    # produces. Re-masking is on by default; add --tau-max 0.9 --terminal-denoise to also avoid
+    # the singular endpoint, and --no-project-v only to reproduce the pre-fix behaviour.
     if args.sigma is not None:
         model.noise_sigma = args.sigma
+    ode_steps = args.ode_steps if args.ode_steps is not None else args.steps
     stride = max(1, nf // args.starts)
     starts = list(range(0, nf - 1 - args.steps, stride))
     model_feats, start_feats = [], []
@@ -131,23 +161,42 @@ def main():
             canon_symmetric=bool(cd.get("canon_symmetric", False)),
         )
         P0 = (P0 - P0.mean(0, keepdim=True)).to(device)
+        # atom_mask is required whenever the checkpoint was trained with source_noise_v,
+        # and is what --project-v re-masks with; omitting it made the ODE path unusable.
         init = {"P_t": P0[None], "V_t": V0[None].to(device),
                 "res_index": torch.as_tensor(layout.res_index, device=device)[None],
+                "atom_mask": torch.as_tensor(layout.atom_mask, device=device)[None],
                 "delta_ns": torch.tensor([1.0], device=device),
                 "residue_mask": torch.ones(1, N, dtype=torch.bool, device=device)}
         start_feats.append(pairdist_features(P0.cpu()))
         if args.gen == "rollout":
             gen = torch.Generator().manual_seed(si)
-            traj, _ = rollout(model, init, n_steps=args.steps, mode="mean", gate=True, generator=gen)
+            # Chained jumps are the only path that can explore beyond the start basin:
+            # a single delta=1 ns jump barely leaves it, so --gen conditional can never
+            # beat the start-only reference by much. This branch used to be pinned to
+            # mode="mean", which has exactly zero ensemble spread, so it was not a
+            # distributional test at all. It now honours the same sampler flags.
+            traj, _ = rollout(model, init, n_steps=args.steps, ode_steps=ode_steps,
+                              mode=args.rollout_mode, gate=args.gate, generator=gen,
+                              sample_kwargs=dict(integrator=args.integrator,
+                                                 tau_max=args.tau_max,
+                                                 terminal_denoise=args.terminal_denoise,
+                                                 project_v_atom_mask=args.project_v))
             for (P, _V) in traj[1:]:
                 model_feats.append(pairdist_features(P[0].cpu()))
         else:
             for k in range(args.K):
                 gen = torch.Generator().manual_seed(si * 1000 + k)
-                P, _V = model.sample(init, steps=args.steps, mode="ode", generator=gen)
+                P, _V = model.sample(init, steps=ode_steps, mode="ode", generator=gen,
+                                     integrator=args.integrator, tau_max=args.tau_max,
+                                     terminal_denoise=args.terminal_denoise,
+                                     project_v_atom_mask=args.project_v)
                 model_feats.append(pairdist_features(P[0].cpu()))
     model_feats = np.stack(model_feats)
-    print(f"gen={args.gen}  sigma={model.noise_sigma}  ensemble={len(model_feats)}")
+    print(f"gen={args.gen}  sigma={model.noise_sigma}  ode_steps={ode_steps}  "
+          f"integrator={args.integrator}  tau_max={args.tau_max}  "
+          f"terminal_denoise={args.terminal_denoise}  project_v={args.project_v}  "
+          f"ensemble={len(model_feats)}")
     start_feats = np.stack(start_feats)
     model_tic = (model_feats - real_feats.mean(0)) @ proj
     start_tic = (start_feats - real_feats.mean(0)) @ proj

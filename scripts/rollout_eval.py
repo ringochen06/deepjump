@@ -14,6 +14,7 @@ Also tracks CA-CA bond geometry (chemical validity) and native-contact recovery.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 from pathlib import Path
 
@@ -36,9 +37,14 @@ from deepjump.utils import resolve_device, split_domains  # noqa: E402
 def load_model(ckpt, device):
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     cm, cd = ck["cfg"]["model"], ck["cfg"]["data"]
-    model = DeepJumpLite(ModelConfig(**cm), noise_sigma=cd["noise_sigma"],
+    known = {f.name for f in dataclasses.fields(ModelConfig)}
+    for key, value in cm.items():
+        if key not in known and value:
+            raise SystemExit(f"checkpoint sets unknown model option {key}={value!r}")
+    model = DeepJumpLite(ModelConfig(**{k: v for k, v in cm.items() if k in known}),
+                         noise_sigma=cd["noise_sigma"],
                          predict_heavy=cm["predict_heavy"]).to(device)
-    model.load_state_dict(ck["model"]); model.eval()
+    model.load_state_dict(ck["model"], strict=True); model.eval()
     return model, ck["cfg"]
 
 
@@ -65,6 +71,15 @@ def main():
     ap.add_argument("--ode-steps", type=int, default=20)
     ap.add_argument("--mode", choices=["ode", "mean"], default="ode")
     ap.add_argument("--gate", action="store_true", help="geometry acceptance gate")
+    ap.add_argument("--tau-max", type=float, default=1.0,
+                    help="truncate the interpolant before the singular endpoint; <1 needs --terminal-denoise")
+    ap.add_argument("--terminal-denoise", action="store_true",
+                    help="emit one endpoint prediction at tau_max instead of integrating into the singularity")
+    ap.add_argument("--project-v", action=argparse.BooleanOptionalAction, default=True,
+                    help="re-mask V every ODE step (default on; --no-project-v reproduces "
+                         "the pre-fix sampler, which pollutes V's zero-padded slots)")
+    ap.add_argument("--integrator", choices=["euler", "heun"], default="euler")
+    ap.add_argument("--root", default=None, help="override the checkpoint's data root")
     ap.add_argument("--starts", type=int, default=5, help="number of start frames to average")
     ap.add_argument("--out", default="runs/rollout")
     args = ap.parse_args()
@@ -77,7 +92,7 @@ def main():
     df = cd["delta_frames"]
     delta = df if isinstance(df, int) else int(df[0])  # multi-delta model: roll at the smallest
 
-    files = discover_domains(cd["root"])
+    files = discover_domains(args.root or cd["root"])
     _, val = split_domains(files, cd["val_fraction"], cd["seed"])
     handle = _DomainHandle(sorted(val)[0])
     temp, rep = cd["temperatures"][0], cd["replicas"][0]
@@ -109,15 +124,24 @@ def main():
         )
         P0, V0 = real[0]
         mask = torch.ones(1, N, dtype=torch.bool, device=device)
+        # atom_mask is mandatory for checkpoints trained with source_noise_v, and is what
+        # --project-v re-masks with; without it the ODE path raises and only mode="mean"
+        # (which has zero ensemble spread) could run.
         init = {
             "P_t": P0[None], "V_t": V0[None],
             "res_index": torch.as_tensor(layout.res_index, device=device)[None],
+            "atom_mask": torch.as_tensor(layout.atom_mask, device=device)[None],
+            "bond_mask": torch.as_tensor(layout.bond_mask, device=device)[None],
             "delta_ns": torch.tensor([float(delta)], device=device),
             "residue_mask": mask,
         }
         gen.manual_seed(si)
         traj, accepts = rollout(model, init, n_steps=args.steps, ode_steps=args.ode_steps,
-                                mode=args.mode, gate=args.gate, generator=gen)
+                                mode=args.mode, gate=args.gate, generator=gen,
+                                sample_kwargs=dict(integrator=args.integrator,
+                                                   tau_max=args.tau_max,
+                                                   terminal_denoise=args.terminal_denoise,
+                                                   project_v_atom_mask=args.project_v))
         if accepts:
             accept_rates.append(float(torch.stack(accepts).float().mean().item()))
         for k in range(K):
