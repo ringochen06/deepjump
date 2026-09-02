@@ -40,3 +40,7 @@ wandb/
 .DS_Store
 .vscode/
 .idea/
+
+# scratch working directories from agent sessions
+.codex-tmp/
+.codex-staging/
