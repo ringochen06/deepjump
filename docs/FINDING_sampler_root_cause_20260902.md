@@ -118,7 +118,8 @@ originally written.
 
 ### `[MEASURED]` Re-measured with both defects fixed, the sampler fix wins everywhere
 
-Formal 500k checkpoint, four held-out domains, conditional stochastic ensemble,
+Formal 500k checkpoint, four mdCATH domains (training status unverified -- see the
+limitation below), conditional stochastic ensemble,
 20 starts x K=4, 50 Euler steps. Same checkpoint and domains throughout; only the
 sampler differs.
 
@@ -133,6 +134,26 @@ Figures: `docs/tica_panel.png` (fixed) and `docs/tica_panel_prefix_control.png`
 (control). 0.45-0.58 is not a good score -- the ensemble covers roughly the right
 region without reproducing real MD's basin structure -- but the ordering is now
 consistent across every domain tested.
+
+### `[LIMITATION]` The four comparison domains are almost certainly not held out
+
+`tica_panel.py` selected them with `split_domains()` over whatever mdCATH shards
+sit on the local disk (200 of 5,398). That says nothing about what the formal
+checkpoint trained on: its contract records **5,218 train domains** and 180
+excluded, and the run used `val_fraction: 0.02`, so roughly 284 of 5,398 domains
+(~5%) were withheld. Four independently drawn domains all landing in that 5% has
+probability ~1e-5.
+
+The comparison above is still valid for its purpose -- it isolates the sampler,
+with checkpoint and domains held fixed and only the sampler differing -- but it
+is **not** evidence about generalisation to unseen proteins, and the figure title
+no longer claims it is. `tica_panel.py` now labels provenance as unverified
+unless given `--held-out-list`, and warns if a listed trained-on domain appears.
+
+Verifying it needs the training list at
+`/data-full/mdcath/control/post_download_qualification/20260724T055218Z/full_training_contract/train_eligible_5218.txt`
+(sha256 `e6844f2f57b24b60fce70a08a6e99b720a60f8cc1d2fd50a69bfc005eff6416e`),
+which is on the cloud host and not mirrored locally.
 
 ### `[SUPERSEDED]` The earlier domain-dependent reading
 

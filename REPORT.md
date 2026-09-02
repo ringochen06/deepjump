@@ -62,7 +62,7 @@ enlarging the grid.
 **Consequence: every JSD figure in §4.5 and §4.6 is void.** The apparent
 "scale ladder" (0.564 → 0.347) partly tracked how far each model diverged, not
 how faithful it was. Re-measured on the formal 500k checkpoint with both defects
-fixed, four held-out domains, same checkpoint and domains, only the sampler
+fixed, four mdCATH domains, same checkpoint and domains, only the sampler
 differing:
 
 | domain | pre-fix sampler | fixed sampler |
@@ -75,6 +75,14 @@ differing:
 The fix wins on every domain. It does not make the model good: 0.45–0.58 means
 the ensemble covers roughly the right region without reproducing real MD's basin
 structure. What the fix buys is a measurement that is no longer inverted.
+
+**Provenance caveat:** the four domains are selected by `split_domains()` over
+the local mdCATH shards, not against the checkpoint's own training list, and the
+formal contract records 5,218 train domains out of 5,398. They are almost
+certainly **not** held out. The comparison isolates the sampler correctly -- same
+checkpoint, same domains -- but says nothing about generalisation to unseen
+proteins. `tica_panel.py` now reports provenance as unverified unless given
+`--held-out-list`.
 
 **Also stale below:** §6 describes this work as "≤200 domains, MPS laptop, ≤60k
 steps". A formal run has since completed on 8 GPUs at 5,218 domains and 500,000
@@ -302,7 +310,7 @@ now data **diversity** (more domains), not training **time**.
 
 > **[REGENERATED 2026-09-02 — see §0a.]** The figure below is now the formal
 > 500k checkpoint under the fixed sampler and fixed metric (JSD 0.45-0.58 on
-> four held-out domains). The pre-fix control is
+> four domains). The pre-fix control is
 > `docs/tica_panel_prefix_control.png` (0.60-0.67). The superseded reading
 > "JSD 0.24-0.32" below described the old figure, whose shared binning was
 > stretched by diverged samples until real MD rendered as a single blob.

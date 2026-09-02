@@ -2,7 +2,7 @@
 """Paper-style TICA panel figure (structure overlay + 2D free-energy heatmaps + marginals).
 
 Reproduces the *layout* of the DeepJump equilibrium-ensemble figure, but honestly on OUR
-scale/data: held-out mdCATH domains (NOT the DESRES fast folders), a DeepJump-native
+scale/data: mdCATH domains (NOT the DESRES fast folders), a DeepJump-native
 stochastic conditional ensemble (K ODE single-jumps per start frame), no folding.
 
 Per domain (one block) we draw 4 sub-panels, exactly like the paper:
@@ -229,7 +229,7 @@ def build_domain(
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", default="runs/faithful_scaled/last.ckpt")
-    ap.add_argument("--n", type=int, default=4, help="number of held-out domains (rows)")
+    ap.add_argument("--n", type=int, default=4, help="number of domains (rows)")
     ap.add_argument("--domains", nargs="*", default=None, help="explicit domain ids")
     ap.add_argument("--cols", type=int, default=1, help="protein blocks per figure row (1 or 2)")
     ap.add_argument("--starts", type=int, default=30)
@@ -243,6 +243,9 @@ def main():
     ap.add_argument("--terminal-denoise", action="store_true",
                     help="emit one endpoint prediction at tau_max instead of integrating into the singularity")
     ap.add_argument("--integrator", choices=["euler", "heun"], default="euler")
+    ap.add_argument("--held-out-list", default=None,
+                    help="file of domain ids the checkpoint did NOT train on; only with this "
+                         "does the figure claim the rows are held out")
     ap.add_argument("--out", default="docs/tica_panel.png")
     args = ap.parse_args()
 
@@ -261,6 +264,12 @@ def main():
                          predict_heavy=cm["predict_heavy"]).to(device)
     model.load_state_dict(ck["model"], strict=True); model.eval()
     print(f"loaded {args.ckpt}  H={cm['hidden']}  device={device}")
+
+    held_out_ids = None
+    if args.held_out_list:
+        held_out_ids = {line.strip() for line in Path(args.held_out_list).read_text().split()
+                        if line.strip()}
+        print(f"held-out list: {len(held_out_ids)} domain ids from {args.held_out_list}")
 
     files = discover_domains(args.root or cd["root"])
     if args.domains:
@@ -327,8 +336,19 @@ def main():
         if bi == 0:
             ax_t1.legend(fontsize=5, loc="upper center", frameon=False)
 
-    fig.suptitle("TICA equilibrium ensemble — held-out mdCATH domains (DeepJump-lite, "
-                 "conditional stochastic ensemble)", fontsize=10, y=1.0)
+    # Provenance must be demonstrated, not asserted. Selecting domains by
+    # split_domains() over whatever happens to be on local disk says nothing about
+    # what the checkpoint trained on: this checkpoint's contract lists 5218 train
+    # domains out of mdCATH's 5398, so a domain drawn without checking the real
+    # list is ~97% likely to have been trained on.
+    if held_out_ids is None:
+        provenance = "training status unverified — no --held-out-list given"
+    else:
+        seen = [b["name"] for b in blocks if b["name"] not in held_out_ids]
+        provenance = ("held-out domains" if not seen
+                      else f"WARNING: trained-on domains present ({', '.join(seen)})")
+    fig.suptitle(f"TICA equilibrium ensemble — mdCATH domains, {provenance}\n"
+                 "(DeepJump-lite, conditional stochastic ensemble)", fontsize=9, y=1.0)
     out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=140, bbox_inches="tight", facecolor="white")
     print(f"saved {out}")
