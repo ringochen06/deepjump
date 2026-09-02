@@ -83,9 +83,14 @@ structure. What the fix buys is a measurement that is no longer inverted.
 **Provenance, settled:** the four domains were checked against the run's own
 training list (`docs/provenance/train_eligible_5218.txt`, sha256 `e6844f2f...6416e`,
 matching the checkpoint's record) and **all four are training domains**. Nine of
-the 200 locally staged domains are genuinely held out; on four of them the model
-scores JSD 0.38-0.45 versus 0.45-0.58 on the trained-on four, so there is **no
-evidence of memorisation**. See `docs/tica_panel_heldout.png`. The comparison isolates the sampler correctly -- same
+the 200 locally staged domains are genuinely held out. Across all thirteen,
+held-out domains average JSD 0.425 and trained-on ones 0.520, so there is **no
+evidence of memorisation**. A landscape-difficulty control (entropy of the real
+MD occupancy) does *not* explain the gap -- training status correlates more
+strongly (+0.769) than difficulty (+0.566) -- but the gap must not be read as
+generalisation ability, since a model cannot genuinely do better on data it never
+saw. The likelier cause is selection bias in the qualification-filtered training
+set. See `docs/tica_panel_heldout.png` and `scripts/generalisation_scan.py`. The comparison isolates the sampler correctly -- same
 checkpoint, same domains -- but says nothing about generalisation to unseen
 proteins. `tica_panel.py` now reports provenance as unverified unless given
 `--held-out-list`.

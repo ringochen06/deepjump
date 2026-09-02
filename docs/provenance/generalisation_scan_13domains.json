@@ -1,0 +1,97 @@
+{
+  "rows": [
+    {
+      "domain": "1pyvA00",
+      "trained_on": false,
+      "jsd": 0.38249879382564267,
+      "real_entropy_bits": 5.932451977003861,
+      "residues": 53
+    },
+    {
+      "domain": "2nluA02",
+      "trained_on": false,
+      "jsd": 0.3923470319592928,
+      "real_entropy_bits": 6.705499380564954,
+      "residues": 50
+    },
+    {
+      "domain": "1r4gA00",
+      "trained_on": false,
+      "jsd": 0.39336548478575484,
+      "real_entropy_bits": 5.847169161449884,
+      "residues": 53
+    },
+    {
+      "domain": "3dmqA01",
+      "trained_on": false,
+      "jsd": 0.3980228930507243,
+      "real_entropy_bits": 6.49364287935275,
+      "residues": 52
+    },
+    {
+      "domain": "1mzbA02",
+      "trained_on": false,
+      "jsd": 0.4309262559090612,
+      "real_entropy_bits": 5.701210982677096,
+      "residues": 51
+    },
+    {
+      "domain": "1s5lH00",
+      "trained_on": false,
+      "jsd": 0.44630265687833753,
+      "real_entropy_bits": 6.230238238626079,
+      "residues": 53
+    },
+    {
+      "domain": "2yo3A02",
+      "trained_on": false,
+      "jsd": 0.45014292020677704,
+      "real_entropy_bits": 6.639196436575299,
+      "residues": 54
+    },
+    {
+      "domain": "1hw7A02",
+      "trained_on": false,
+      "jsd": 0.45290782884234215,
+      "real_entropy_bits": 6.000426638408076,
+      "residues": 50
+    },
+    {
+      "domain": "3udcA02",
+      "trained_on": true,
+      "jsd": 0.45450916640852107,
+      "real_entropy_bits": 6.725389517434798,
+      "residues": 50
+    },
+    {
+      "domain": "2aswA00",
+      "trained_on": false,
+      "jsd": 0.4783853821291094,
+      "real_entropy_bits": 6.533971541594914,
+      "residues": 56
+    },
+    {
+      "domain": "1ce3A00",
+      "trained_on": true,
+      "jsd": 0.5115829115319122,
+      "real_entropy_bits": 6.713352301673609,
+      "residues": 54
+    },
+    {
+      "domain": "1vq8P01",
+      "trained_on": true,
+      "jsd": 0.5362817644162855,
+      "real_entropy_bits": 6.4636674978422475,
+      "residues": 55
+    },
+    {
+      "domain": "1zhsA01",
+      "trained_on": true,
+      "jsd": 0.5756373344918444,
+      "real_entropy_bits": 7.026126443964215,
+      "residues": 55
+    }
+  ],
+  "corr_jsd_entropy": 0.5661283536663931,
+  "corr_jsd_trained": 0.7692139512182671
+}

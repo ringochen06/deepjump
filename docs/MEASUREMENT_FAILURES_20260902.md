@@ -102,6 +102,11 @@ no aggregate, no baseline, and no summary statistic.
   a wrongly grouped table.
 - **Prefer directly measured quantities over aggregates** when establishing that
   something is broken. Aggregates are for deciding whether it is fixed.
+- **State the prediction before running the test.** The generalisation scan was
+  run to confirm that a landscape-difficulty confound explained the held-out
+  advantage. It did not: training status correlated more strongly (+0.769) than
+  difficulty (+0.566). Having written the prediction down first made that a
+  result rather than something to quietly drop.
 
 ## Bearing on the reproduction's conclusions
 

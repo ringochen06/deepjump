@@ -160,24 +160,55 @@ Nine of the 200 locally staged domains are genuinely held out
 (`docs/provenance/heldout_local_9.txt`). Re-running the panel on four of them
 gives the project's first honest generalisation comparison:
 
-| domain | training status | JSD |
-|---|---|---:|
-| 1pyvA00 | held out | **0.38** |
-| 1r4gA00 | held out | **0.39** |
-| 1mzbA02 | held out | 0.43 |
-| 1hw7A02 | held out | 0.45 |
-| 3udcA02 | trained on | 0.45 |
-| 1ce3A00 | trained on | 0.51 |
-| 1vq8P01 | trained on | 0.54 |
-| 1zhsA01 | trained on | 0.58 |
+Widened to all nine held-out domains, with a landscape-difficulty control: the
+Shannon entropy of the *real MD* occupancy on the same grid the JSD uses. A
+landscape spread over many bins is harder to reproduce regardless of training.
 
-Held out averages 0.41, trained on 0.52. **No evidence of memorisation**: if the
-model had overfit its training domains they would score better, and they do not.
-The ordering is more plausibly driven by how structured each domain's real free
-energy surface is -- 1pyvA00 and 1r4gA00 have simple single-loop landscapes,
-1zhsA01 the most diffuse -- than by training exposure, so this is evidence
-against overfitting rather than a claim that unseen proteins are easier. Eight
-domains on one metric is a weak basis for anything stronger.
+| domain | training status | JSD | real entropy (bits) |
+|---|---|---:|---:|
+| 1pyvA00 | held out | **0.382** | 5.93 |
+| 2nluA02 | held out | 0.392 | 6.71 |
+| 1r4gA00 | held out | 0.393 | 5.85 |
+| 3dmqA01 | held out | 0.398 | 6.49 |
+| 1mzbA02 | held out | 0.431 | 5.70 |
+| 1s5lH00 | held out | 0.446 | 6.23 |
+| 2yo3A02 | held out | 0.450 | 6.64 |
+| 1hw7A02 | held out | 0.453 | 6.00 |
+| 3udcA02 | trained on | 0.455 | 6.73 |
+| 2aswA00 | held out | 0.478 | 6.53 |
+| 1ce3A00 | trained on | 0.512 | 6.71 |
+| 1vq8P01 | trained on | 0.536 | 6.46 |
+| 1zhsA01 | trained on | **0.576** | 7.03 |
+
+Held out (n=9) averages JSD 0.425 at entropy 6.23; trained on (n=4) averages
+0.520 at entropy 6.73.
+
+```
+corr(JSD, real-landscape entropy) = +0.566
+corr(JSD, trained-on)             = +0.769
+```
+
+**The difficulty explanation was tested and did not hold.** The prediction going
+in was that entropy would dominate and the held-out advantage would prove an
+artefact. Training status is the stronger association, and three of the four
+trained-on domains occupy the bottom four places.
+
+The effect is therefore real but must not be read as generalisation ability -- a
+model cannot genuinely do better on data it never saw. The remaining explanation
+is **selection bias in the training set itself**: the 5,218 ids are a
+qualification-filtered subset with 180 domains excluded, and if that filter
+favoured conformationally richer domains then the training group is intrinsically
+harder. The entropy means point that way (6.73 versus 6.23) without settling it.
+
+The defensible statement is: **no evidence of memorisation or overfitting, and
+the apparent held-out advantage is more likely an artefact of how the training
+set was selected than a generalisation result.** Four trained-on domains against
+nine held-out ones, on a single metric, supports nothing stronger.
+
+Reproduce with `scripts/generalisation_scan.py`; raw values in
+`docs/provenance/generalisation_scan_13domains.json`. The script requires the
+caller to declare each domain's training status and exits if the training list
+disagrees, so a mistyped id cannot silently produce a wrongly grouped table.
 
 Figures: `docs/tica_panel_heldout.png` (held out) and `docs/tica_panel.png`
 (trained on, now labelled as such). `tica_panel.py` takes `--train-list` and
