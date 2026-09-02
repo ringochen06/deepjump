@@ -39,6 +39,10 @@ evaluation — with clearly marked boundaries and honest negative results.*
 as written because the reasoning path is itself evidence; every superseded claim
 is flagged inline and resolved here. Full analysis:
 [`docs/FINDING_sampler_root_cause_20260902.md`](docs/FINDING_sampler_root_cause_20260902.md).
+The session turned up five such defects in total, all in the measuring
+apparatus rather than the model, all producing plausible output; the pattern
+and the practices adopted against it are in
+[`docs/MEASUREMENT_FAILURES_20260902.md`](docs/MEASUREMENT_FAILURES_20260902.md).
 
 **Defect 1 — the sampler corrupted V's zero-padded atom slots.** `V` is
 `[N, 13, 3]` and residues carry different heavy-atom counts, so 283 of 650 slots
