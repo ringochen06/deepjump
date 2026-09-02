@@ -257,7 +257,10 @@ def main() -> None:
     parser.add_argument("--tau-max", type=float, default=1.0)
     parser.add_argument("--terminal-denoise", action="store_true")
     parser.add_argument("--drift-anchor", choices=("state", "conditioner"), default="state")
-    parser.add_argument("--project-v-atom-mask", action="store_true")
+    parser.add_argument(
+        "--project-v-atom-mask", action=argparse.BooleanOptionalAction, default=True,
+        help="re-mask V onto atom_mask at every sampler transition (default on; --no-project-v-atom-mask reproduces the pre-fix sampler, which writes into V's structural zero padding and compounds into broken geometry)",
+    )
     parser.add_argument("--max-abs-coordinate", type=float, default=10000.0)
     parser.add_argument("--fps", type=int, default=20)
     parser.add_argument("--out", required=True, type=Path)

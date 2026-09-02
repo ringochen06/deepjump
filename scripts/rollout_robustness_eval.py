@@ -24,7 +24,7 @@ from deepjump.metrics import aligned_ca_rmsd, contact_fraction_native
 from deepjump.model import DeepJumpLite
 from deepjump.representation import apply_model_layout
 from deepjump.sampling import rollout
-from deepjump.utils import resolve_device
+from deepjump.utils import model_config_kwargs, resolve_device
 
 
 def select_validation_domains(paths: list[str], count: int) -> list[str]:
@@ -164,8 +164,18 @@ def main() -> None:
     ap.add_argument("--terminal-denoise", action="store_true")
     ap.add_argument("--drift-anchor", choices=("state", "conditioner"), default="state")
     ap.add_argument(
-        "--project-v-atom-mask", action="store_true",
-        help="Project V onto atom_mask at every sampler state transition.",
+        "--project-v-atom-mask", action=argparse.BooleanOptionalAction, default=True,
+        help="re-mask V onto atom_mask at every sampler transition (default on; --no-project-v-atom-mask reproduces the pre-fix sampler, which writes into V's structural zero padding and compounds into broken geometry)",
+    )
+    ap.add_argument(
+        "--root", default=None,
+        help="override the mdCATH root recorded in the checkpoint, for evaluating a "
+             "cloud-trained checkpoint against a local staging directory",
+    )
+    ap.add_argument(
+        "--device", default=None,
+        help="override the device recorded in the checkpoint (e.g. to evaluate a "
+             "cuda-trained checkpoint on cpu or mps)",
     )
     ap.add_argument(
         "--teacher-forced-mean", action="store_true",
@@ -191,18 +201,19 @@ def main() -> None:
 
     ck = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cm, cd = ck["cfg"]["model"], ck["cfg"]["data"]
-    device = resolve_device(ck["cfg"]["train"]["device"])
+    device = resolve_device(args.device or ck["cfg"]["train"]["device"])
     noise_sigma = cd["noise_sigma"] if args.noise_sigma is None else args.noise_sigma
-    model = DeepJumpLite(ModelConfig(**cm), noise_sigma=noise_sigma,
+    model = DeepJumpLite(ModelConfig(**model_config_kwargs(cm, ModelConfig)),
+                         noise_sigma=noise_sigma,
                          predict_heavy=cm["predict_heavy"]).to(device)
-    model.load_state_dict(ck["model"])
+    model.load_state_dict(ck["model"], strict=True)
     model.eval()
 
     delta = require_single_delta(cd["delta_frames"])
     domain_ids, domain_list_sha256 = load_frozen_domain_ids(
         args.domain_list, args.domain_list_sha256
     )
-    panel = resolve_frozen_domains(discover_domains(cd["root"]), domain_ids)
+    panel = resolve_frozen_domains(discover_domains(args.root or cd["root"]), domain_ids)
     chosen = select_validation_domains(panel, args.domains)
     requested_methods = [name.strip() for name in args.methods.split(",") if name.strip()]
     invalid = [name for name in requested_methods if name != "mean" and not name.startswith("ode_")]

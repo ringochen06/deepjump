@@ -90,6 +90,44 @@ No explicit argument passed, `tau_max=1.0` (the previously worst case):
 | 50 | 0.000e+00 | 3.89 |
 | 150 | 0.000e+00 | 3.90 |
 
+### 6. `[MEASURED]` The historical geometry-failure counts were produced under the defect
+
+`scripts/rollout_robustness_eval.py` declared `--project-v-atom-mask` as
+`action="store_true"`, so it defaulted to False and passed that value positively
+into the sampler. Every endpoint-only stress test recorded in `STATUS.md` ran
+with re-masking off.
+
+A/B on nine genuinely held-out domains, same checkpoint, same starts, same seed,
+3 starts x 20 steps, `ode_20`, `tau_max=1.0`:
+
+| setting | outcome |
+|---|---|
+| `--no-project-v-atom-mask` (the historical setting) | Kabsch SVD failed to converge; coordinates degenerate past rigid-body alignment |
+| `--project-v-atom-mask` (the current default) | 9/9 domains completed, `finite: true` |
+
+Final CA-CA bond with re-masking on (real 3.8 A):
+
+| domain | bond mean | bond max | bond MAE |
+|---|---:|---:|---:|
+| 1hw7A02 | 3.796 | 3.933 | 0.074 |
+| 1mzbA02 | 3.801 | 4.017 | 0.087 |
+| 1pyvA00 | 3.776 | 4.020 | 0.094 |
+| 1r4gA00 | 3.803 | 3.978 | 0.081 |
+| 1s5lH00 | 3.765 | 3.987 | 0.108 |
+| 2aswA00 | 3.815 | 3.948 | 0.072 |
+| 2nluA02 | 3.795 | 4.042 | 0.092 |
+| 2yo3A02 | 3.737 | 3.936 | 0.117 |
+| 3dmqA01 | 3.758 | 3.893 | 0.088 |
+
+Mean 3.783 A, worst 4.04 A; no domain crosses a geometry safety threshold. The
+`71/96`, `6/15`, `22/64` and `42/64` counts in `STATUS.md` therefore measured the
+sampler, not the model, and were re-labelled there on 2026-09-02.
+
+**This does not create folding evidence.** The same run has the model beating
+no-op on only `5/9` domains, with `mean_final_rmsd` 5.275 against no-op's 5.252 --
+geometry is now legal and the model still does not outperform standing still over
+20 ns. Raw values: `docs/provenance/stress_heldout9_ode20_remasked.json`.
+
 ## A second defect, and what the fixes do and do not buy
 
 ### `[MEASURED]` The TICA JSD rewarded divergence
