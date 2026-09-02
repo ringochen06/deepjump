@@ -178,20 +178,43 @@ and has still never been run.
 
 `mode="mean"` is the deterministic conditional mean at tau=0. It has **exactly
 zero** ensemble spread (measured 0.000 A across 12 seeds), and for diffusive
-dynamics the conditional mean is approximately the identity. It appears in ten
-evaluation scripts:
+dynamics the conditional mean is approximately the identity.
 
-```
-endpoint_panel_eval.py               endpoint_grid_eval.py
-guarded_endpoint_panel_eval.py       external_endpoint_root_cause.py
-external_step2000_outlier_replay.py  transition_robustness_eval.py
-robustness_eval.py                   rollout_robustness_eval.py
-rollout_eval.py                      tica_eval.py
-```
+Two evaluators drew distributional conclusions from it and are fixed:
+`tica_eval.py`'s rollout branch was pinned to it, so it was not a distributional
+test at all, and `rollout_eval.py` could not reach the ODE path because it never
+built an `atom_mask`.
 
-The endpoint family calls it as `steps=1, mode="mean"`. Any "no-op margin" study
-built on those calls measured a quantity that is near zero by construction, and
-the adjudication machinery in `reviews/` rests on those numbers.
+**`[MEASURED]` The remaining eight uses were audited and are correct as written.**
+An earlier draft of this document claimed all ten were contaminated; that was
+wrong.
+
+- Six are deterministic by design -- endpoint identity checks and root-cause
+  probes (`endpoint_grid_eval`, `endpoint_panel_eval`,
+  `external_endpoint_root_cause`, `external_step2000_outlier_replay`,
+  `guarded_endpoint_panel_eval`, `robustness_eval`). Several deliberately sample
+  the same batch twice to verify determinism, which requires a zero-spread mode.
+- `rollout_robustness_eval` uses it teacher-forced, predicting each horizon from
+  its real preceding state, which isolates single-step error from compounding.
+- `transition_robustness_eval` scores it as one method among the ODE samplers
+  under an energy score. That is sound because the score is proper in expectation
+  over observations, which is how the script uses it (averaged over start
+  frames). Verified: against a standard-normal truth with 16 draws, expected
+  scores are calibrated 0.893, under-dispersed 0.936, over-dispersed 1.037,
+  deterministic 1.263 -- the calibrated ensemble wins and the zero-spread
+  forecast is ranked last. Pinned by `tests/test_energy_score_properness.py`.
+
+**`[MEASURED]` The default flip caused no regression.** Four scripts appear to
+omit `atom_mask`, which `sample()` now requires, but all obtain it from
+`collate_pairs` (`src/deepjump/data/mdcath.py:363`) or the shared `_batch` helper
+(`scripts/external_endpoint_root_cause.py:84`). Only `tica_panel.py` genuinely
+lacked it; that is fixed.
+
+A related caveat stands but is not a defect: comparing a deterministic one-step
+prediction against no-op is a weak signal, because the conditional mean of a
+diffusive process is close to persistence. `REPORT.md` section 5.2 already says
+so. The endpoint machinery measures a small margin on purpose; it is not
+measuring the wrong thing.
 
 `REPORT.md` section 4.5 attributes the distributional gap to scale. **That
 conclusion is stale** — it predates the formal run. The 500k checkpoint already
