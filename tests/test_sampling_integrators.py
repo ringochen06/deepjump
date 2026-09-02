@@ -208,18 +208,27 @@ def test_project_v_atom_mask_keeps_every_sampler_state_masked(
     assert torch.count_nonzero(V[:, :, 5:]) == 0
 
 
-def test_project_v_atom_mask_is_default_off_and_requires_a_mask():
+def test_project_v_atom_mask_is_default_on_and_requires_a_mask():
+    """Re-masking defaults on; opting out provably lets the padded slots drift.
+
+    The default flipped once the padded slots were measured filling with garbage
+    that compounds through the conditioner (3.2e3 magnitude by 150 Euler steps on
+    the formal 500k checkpoint). See tests/test_sampler_atom_mask_invariant.py.
+    """
     batch = _batch()
     batch["atom_mask"][:, :, 5:] = False
     model = InvalidVectorEndpointModel(
         ModelConfig(source_noise_v=False), noise_sigma=0.0, predict_heavy=True
     ).eval()
-    _, legacy = model.sample(batch, steps=1)
-    assert torch.count_nonzero(legacy[:, :, 5:]) > 0
+    _, projected = model.sample(batch, steps=1)
+    assert torch.count_nonzero(projected[:, :, 5:]) == 0
+
+    _, opted_out = model.sample(batch, steps=1, project_v_atom_mask=False)
+    assert torch.count_nonzero(opted_out[:, :, 5:]) > 0
 
     without_mask = {key: value for key, value in batch.items() if key != "atom_mask"}
     with pytest.raises(ValueError, match="requires atom_mask"):
-        model.sample(without_mask, steps=1, project_v_atom_mask=True)
+        model.sample(without_mask, steps=1)
 
 
 def test_project_v_atom_mask_preserves_all_valid_result_bitwise():

@@ -15,6 +15,10 @@ def _toy_batch(B=2, N=9, seed=0):
         "V_1": torch.randn(B, N, 13, 3, generator=g) * 0.3,
         "res_index": torch.randint(0, 20, (B, N), generator=g),
         "residue_mask": torch.ones(B, N, dtype=torch.bool),
+        # Every real batch carries one, and sampling re-masks V with it by
+        # default. All-true keeps these shape smoke tests numerically unchanged;
+        # the padding semantics are covered in test_sampler_atom_mask_invariant.
+        "atom_mask": torch.ones(B, N, 13, dtype=torch.bool),
         "delta_ns": torch.ones(B),
     }
 

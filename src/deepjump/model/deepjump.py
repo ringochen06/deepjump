@@ -157,16 +157,41 @@ class DeepJumpLite(nn.Module):
         tau_max: float = 1.0,
         terminal_denoise: bool = False,
         drift_anchor: str = "state",
-        project_v_atom_mask: bool = False,
+        project_v_atom_mask: bool = True,
     ):
         """Predict X_{t+delta} from X_t. Returns (P, V).
 
         mode="ode"  : integrate the endpoint-prediction ODE from tau=0.
         mode="mean" : one-shot x1 prediction at tau=0 (the deterministic conditional
-                      mean); no integration, no noise. Stable but conservative.
+                      mean); no integration, no noise. It has *exactly zero*
+                      ensemble spread (measured 0.000 A across 12 seeds), and for
+                      diffusive dynamics the conditional mean is approximately the
+                      identity. Use it only for deterministic identity checks --
+                      never for a distributional, kinetic, or rollout claim.
+
+        `project_v_atom_mask` re-masks V after every update, matching the
+        first-party release. V is [N, 13, 3] and residues carry different
+        heavy-atom counts, so a large fraction of its slots (283 of 650 on
+        mdCATH 1a92A00) must stay exactly zero. Without re-masking the Euler
+        update writes into those slots, the values re-enter the conditioner on
+        the next iteration as inputs training never produced, and they compound:
+        measured padded-slot magnitude reaches 3.1e1 at 20 steps and 3.2e3 at
+        150, taking the real coordinates with it (CA-CA bond 3.8 -> 40.8 A).
+        With re-masking the padded slots stay at 0.0 and the real slots are
+        step-count independent. It defaults on because the zero-padding
+        invariant is a correctness property, not a tuning knob; it needs
+        `atom_mask` in the batch.
+
         integrator="heun" uses a second-order predictor-corrector.  Setting
         tau_max<1 avoids the singular endpoint; terminal_denoise then returns one
-        final endpoint prediction at tau_max.  Defaults preserve legacy sampling.
+        final endpoint prediction at tau_max.  These three default to the legacy
+        sampler, but `project_v_atom_mask` deliberately does not.
+
+        Step count is not free: measured on the formal 500k checkpoint with
+        tau_max=1 and no re-masking, CA-CA bond held to ~30 Euler steps and broke
+        by 50 (3.8 -> 6.5 A). Re-masking removes that cliff, and a higher step
+        count then buys ensemble spread closer to real MD.
+
         When predict_heavy, V is produced the same way; else V stays V_t.
         """
         if steps < 1:

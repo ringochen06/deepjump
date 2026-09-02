@@ -189,8 +189,12 @@ def build_domain(
             c, layout, canon_symmetric=canon_symmetric
         )
         P0 = (P0 - P0.mean(0, keepdim=True)).to(device)
+        # atom_mask is required both by source_noise_v checkpoints and by the
+        # per-step V re-masking that keeps the sampled state on the training
+        # manifold; omitting it made the ODE path unusable here.
         init = {"P_t": P0[None], "V_t": V0[None].to(device),
                 "res_index": torch.as_tensor(layout.res_index, device=device)[None],
+                "atom_mask": torch.as_tensor(layout.atom_mask, device=device)[None],
                 "delta_ns": torch.tensor([1.0], device=device),
                 "residue_mask": torch.ones(1, N, dtype=torch.bool, device=device)}
         for k in range(K):
