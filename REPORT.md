@@ -76,10 +76,12 @@ The fix wins on every domain. It does not make the model good: 0.45–0.58 means
 the ensemble covers roughly the right region without reproducing real MD's basin
 structure. What the fix buys is a measurement that is no longer inverted.
 
-**Provenance caveat:** the four domains are selected by `split_domains()` over
-the local mdCATH shards, not against the checkpoint's own training list, and the
-formal contract records 5,218 train domains out of 5,398. They are almost
-certainly **not** held out. The comparison isolates the sampler correctly -- same
+**Provenance, settled:** the four domains were checked against the run's own
+training list (`docs/provenance/train_eligible_5218.txt`, sha256 `e6844f2f...6416e`,
+matching the checkpoint's record) and **all four are training domains**. Nine of
+the 200 locally staged domains are genuinely held out; on four of them the model
+scores JSD 0.38-0.45 versus 0.45-0.58 on the trained-on four, so there is **no
+evidence of memorisation**. See `docs/tica_panel_heldout.png`. The comparison isolates the sampler correctly -- same
 checkpoint, same domains -- but says nothing about generalisation to unseen
 proteins. `tica_panel.py` now reports provenance as unverified unless given
 `--held-out-list`.

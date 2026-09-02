@@ -135,25 +135,55 @@ Figures: `docs/tica_panel.png` (fixed) and `docs/tica_panel_prefix_control.png`
 region without reproducing real MD's basin structure -- but the ordering is now
 consistent across every domain tested.
 
-### `[LIMITATION]` The four comparison domains are almost certainly not held out
+### `[MEASURED]` The four comparison domains were training domains, and generalisation now tests clean
 
-`tica_panel.py` selected them with `split_domains()` over whatever mdCATH shards
-sit on the local disk (200 of 5,398). That says nothing about what the formal
-checkpoint trained on: its contract records **5,218 train domains** and 180
-excluded, and the run used `val_fraction: 0.02`, so roughly 284 of 5,398 domains
-(~5%) were withheld. Four independently drawn domains all landing in that 5% has
-probability ~1e-5.
+The original figure title asserted "held-out mdCATH domains" while the rows came
+from `split_domains()` over whatever mdCATH shards sit on local disk, which says
+nothing about what the checkpoint trained on.
 
-The comparison above is still valid for its purpose -- it isolates the sampler,
-with checkpoint and domains held fixed and only the sampler differing -- but it
-is **not** evidence about generalisation to unseen proteins, and the figure title
-no longer claims it is. `tica_panel.py` now labels provenance as unverified
-unless given `--held-out-list`, and warns if a listed trained-on domain appears.
+Settled against the run's own training list, retrieved from
+`obs://deepjump-mdcath-cn4-ringochen/deepjump-full-data/full-mdcath-qualified/20260724T055218Z/qualification/train_eligible_5218.txt`
+and mirrored at `docs/provenance/train_eligible_5218.txt`. Its sha256 is
+`e6844f2f57b24b60fce70a08a6e99b720a60f8cc1d2fd50a69bfc005eff6416e`, matching the
+value recorded inside the checkpoint, and it holds exactly 5,218 ids.
 
-Verifying it needs the training list at
-`/data-full/mdcath/control/post_download_qualification/20260724T055218Z/full_training_contract/train_eligible_5218.txt`
-(sha256 `e6844f2f57b24b60fce70a08a6e99b720a60f8cc1d2fd50a69bfc005eff6416e`),
-which is on the cloud host and not mirrored locally.
+All four were training domains:
+
+```
+1ce3A00  IN TRAINING SET
+1vq8P01  IN TRAINING SET
+1zhsA01  IN TRAINING SET
+3udcA02  IN TRAINING SET
+```
+
+Nine of the 200 locally staged domains are genuinely held out
+(`docs/provenance/heldout_local_9.txt`). Re-running the panel on four of them
+gives the project's first honest generalisation comparison:
+
+| domain | training status | JSD |
+|---|---|---:|
+| 1pyvA00 | held out | **0.38** |
+| 1r4gA00 | held out | **0.39** |
+| 1mzbA02 | held out | 0.43 |
+| 1hw7A02 | held out | 0.45 |
+| 3udcA02 | trained on | 0.45 |
+| 1ce3A00 | trained on | 0.51 |
+| 1vq8P01 | trained on | 0.54 |
+| 1zhsA01 | trained on | 0.58 |
+
+Held out averages 0.41, trained on 0.52. **No evidence of memorisation**: if the
+model had overfit its training domains they would score better, and they do not.
+The ordering is more plausibly driven by how structured each domain's real free
+energy surface is -- 1pyvA00 and 1r4gA00 have simple single-loop landscapes,
+1zhsA01 the most diffuse -- than by training exposure, so this is evidence
+against overfitting rather than a claim that unseen proteins are easier. Eight
+domains on one metric is a weak basis for anything stronger.
+
+Figures: `docs/tica_panel_heldout.png` (held out) and `docs/tica_panel.png`
+(trained on, now labelled as such). `tica_panel.py` takes `--train-list` and
+derives held-out as the complement, so passing the training list by mistake
+cannot invert the test -- the first version of this check took a held-out list
+directly and did exactly that.
 
 ### `[SUPERSEDED]` The earlier domain-dependent reading
 

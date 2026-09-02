@@ -243,9 +243,9 @@ def main():
     ap.add_argument("--terminal-denoise", action="store_true",
                     help="emit one endpoint prediction at tau_max instead of integrating into the singularity")
     ap.add_argument("--integrator", choices=["euler", "heun"], default="euler")
-    ap.add_argument("--held-out-list", default=None,
-                    help="file of domain ids the checkpoint did NOT train on; only with this "
-                         "does the figure claim the rows are held out")
+    ap.add_argument("--train-list", default=None,
+                    help="file of domain ids the checkpoint DID train on (e.g. the run's "
+                         "train_eligible list); a row is held out only if absent from it")
     ap.add_argument("--out", default="docs/tica_panel.png")
     args = ap.parse_args()
 
@@ -265,11 +265,14 @@ def main():
     model.load_state_dict(ck["model"], strict=True); model.eval()
     print(f"loaded {args.ckpt}  H={cm['hidden']}  device={device}")
 
-    held_out_ids = None
-    if args.held_out_list:
-        held_out_ids = {line.strip() for line in Path(args.held_out_list).read_text().split()
-                        if line.strip()}
-        print(f"held-out list: {len(held_out_ids)} domain ids from {args.held_out_list}")
+    # The canonical artifact is the *training* list; held-out is its complement.
+    # Taking the held-out set directly would invert the test whenever the training
+    # list is passed by mistake, and the training list is what actually ships.
+    trained_ids = None
+    if args.train_list:
+        trained_ids = {line.strip() for line in Path(args.train_list).read_text().split()
+                       if line.strip()}
+        print(f"train list: {len(trained_ids)} domain ids from {args.train_list}")
 
     files = discover_domains(args.root or cd["root"])
     if args.domains:
@@ -341,10 +344,10 @@ def main():
     # what the checkpoint trained on: this checkpoint's contract lists 5218 train
     # domains out of mdCATH's 5398, so a domain drawn without checking the real
     # list is ~97% likely to have been trained on.
-    if held_out_ids is None:
-        provenance = "training status unverified — no --held-out-list given"
+    if trained_ids is None:
+        provenance = "training status unverified — no --train-list given"
     else:
-        seen = [b["name"] for b in blocks if b["name"] not in held_out_ids]
+        seen = [b["name"] for b in blocks if b["name"] in trained_ids]
         provenance = ("held-out domains" if not seen
                       else f"WARNING: trained-on domains present ({', '.join(seen)})")
     fig.suptitle(f"TICA equilibrium ensemble — mdCATH domains, {provenance}\n"
