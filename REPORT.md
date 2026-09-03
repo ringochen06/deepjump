@@ -15,7 +15,8 @@ evaluation — with clearly marked boundaries and honest negative results.*
 - **Built:** `(P,V)` representation · Kabsch-aligned state-pair dataloader · hand-rolled
   SE(3)-equivariant two-stage transformer (GVP/EGNN-style, **no e3nn**) · AlphaFlow x₁-prediction
   generative framework · pairwise-vector / heavy-atom / 25 Å all-atom losses · ODE + mean sampling ·
-  multi-step rollout · **TICA distributional evaluation** · 14/14 equivariance/masking/shape tests.
+  multi-step rollout · **TICA distributional evaluation** · equivariance/masking/shape tests
+  (14 at the time of writing; the suite is now 578).
 - **The model clearly learns the transport field** (single-step CA RMSD falls monotonically
   1.65 → 0.16 Å as the interpolant approaches the target; H=128).
 - **Two research cruxes reproduced honestly:** (1) naive rollout is **unstable** — fixed
@@ -95,12 +96,21 @@ checkpoint, same domains -- but says nothing about generalisation to unseen
 proteins. `tica_panel.py` now reports provenance as unverified unless given
 `--held-out-list`.
 
+**Ab initio folding, tested directly.** With the sampler fixed, the model takes a
+fully extended chain to native-scale compactness (Rg 51.95 -> 10.96 A) and holds
+legal geometry past a thousand jumps. That is not folding: across three domains,
+two seeds and a shuffled-sequence control, the recovered native-contact fraction
+is not distinguishable from what a random compact chain scores by geometry alone.
+See [`docs/FINDING_no_sequence_specific_folding_20260902.md`](docs/FINDING_no_sequence_specific_folding_20260902.md)
+and the figures it links. §6's statement that ab initio folding is out of reach
+therefore stands, now on direct evidence rather than on its absence.
+
 **Also stale below:** §6 describes this work as "≤200 domains, MPS laptop, ≤60k
 steps". A formal run has since completed on 8 GPUs at 5,218 domains and 500,000
 steps, matching the paper's printed recipe on width, depth, LR schedule, crop,
 effective batch and loss. **Scale is therefore no longer the explanation for the
 distributional gap**, which retires the §4.5/§5.4 conclusion and the first item
-of §7. §8 says `pytest -q # 14/14`; the suite is now 331 tests.
+of §7. §8 said `pytest -q # 14/14`; the suite is now 578 tests.
 
 ---
 
@@ -223,7 +233,8 @@ acceptance gate.
 
 ## 3. Correctness gate
 
-Equivariant nets fail silently — a broken symmetry still trains. The suite (**14/14 pass**) is the
+Equivariant nets fail silently — a broken symmetry still trains. The suite (**14/14 pass when
+this was written; 578 now**) is the
 guardrail:
 
 - **Rotation equivariance** of the representation *and* of the full model, covering both `P̂₁` and
@@ -407,7 +418,7 @@ python scripts/tica_eval.py    --ckpt runs/faithful_scaled/last.ckpt           #
 python scripts/tica_panel.py   --ckpt runs/faithful_scaled/last.ckpt --n 4     # docs/tica_panel.png
 python scripts/plot_summary.py && python scripts/plot_stability.py             # docs/*.png
 
-pytest -q                                                                      # 331 tests
+pytest -q                                                                      # 578 tests
 ```
 
 ## Appendix — repository map
@@ -423,5 +434,6 @@ src/deepjump/
   metrics.py utils.py config.py
 scripts/                train · eval · diagnose_tau · rollout_eval · tica_eval · tica_panel · plot_*
 configs/                ca_delta1 · full_delta1{,_aug,_unroll,_unroll3,_allatom,_h64} · ca_delta10 · faithful_scaled{,_v2}
-tests/                  representation / model equivariance · masking · shapes (14/14)
+tests/                  representation / model equivariance · masking · shapes · sampler
+                        invariants · metric properness · provenance (578)
 ```

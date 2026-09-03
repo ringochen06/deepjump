@@ -90,6 +90,9 @@ Per-structure views: [`figures/panel_extended_start.png`](figures/panel_extended
 clearest single piece of evidence: it is entirely coil, with dashed segments where
 PyMOL cannot assign continuous secondary structure at all.
 
+Every visualisation command used here is collected in
+[`PYMOL_VISUALIZATION.md`](PYMOL_VISUALIZATION.md).
+
 Reproduce with `docs/pymol/compaction_vs_folding.pml`, verified against PyMOL
 3.1.8. One naming trap worth recording: `split_states obj, 601, 601, prefix=step`
 creates `step0601` -- the state number, with no underscore. Assuming otherwise

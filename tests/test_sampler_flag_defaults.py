@@ -20,9 +20,10 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 FLAG = "--project-v-atom-mask"
-# Adjudicators assert what a *past* run recorded; they must keep the historical
-# value and are not sampler entry points.
-ADJUDICATORS = {"adjudicate_ode_step_scan.py"}
+# Adjudicators assert what a *past* run recorded, so they must keep the historical
+# value and are not sampler entry points. Matching by prefix rather than listing
+# names keeps a newly added adjudicator from being treated as a bypass.
+ADJUDICATOR_PREFIX = "adjudicate_"
 
 
 def _add_argument_calls(tree):
@@ -37,7 +38,7 @@ def _add_argument_calls(tree):
 def _flag_definitions():
     """Every add_argument() that defines the re-masking flag, with its source."""
     for path in sorted(SCRIPTS.glob("*.py")):
-        if path.name in ADJUDICATORS:
+        if path.name.startswith(ADJUDICATOR_PREFIX):
             continue
         source = path.read_text()
         if FLAG not in source:
@@ -77,7 +78,21 @@ def test_flag_defaults_to_enabled(name, call):
     )
 
 
-def test_the_adjudicator_still_pins_the_historical_value():
-    """Past runs recorded project_v_atom_mask=False; that record must not be rewritten."""
-    source = (SCRIPTS / "adjudicate_ode_step_scan.py").read_text()
-    assert '"project_v_atom_mask": False' in source
+def test_adjudicators_still_pin_the_historical_value():
+    """Past runs recorded project_v_atom_mask=False; that record must not be rewritten.
+
+    Those runs really did execute with re-masking off, which is why their geometry
+    counts are not evidence about the model. Rewriting the expectation to True
+    would make an adjudicator pass against a run that never happened.
+    """
+    # adjudicate_v_mask_projection is the paired discriminator for this very flag:
+    # it runs projected=False and projected=True against each other, so its
+    # expectation is a parameter by design rather than a pinned historical value.
+    parameterised = {"adjudicate_v_mask_projection.py"}
+    pinned = [
+        path.name for path in SCRIPTS.glob(f"{ADJUDICATOR_PREFIX}*.py")
+        if '"project_v_atom_mask"' in path.read_text() and path.name not in parameterised
+    ]
+    assert pinned, "no adjudicator pins the sampler setting any more"
+    for name in pinned:
+        assert '"project_v_atom_mask": False' in (SCRIPTS / name).read_text(), name
