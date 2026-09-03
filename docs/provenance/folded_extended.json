@@ -1,0 +1,108 @@
+{
+  "domain": "1hw7A02",
+  "start": "extended",
+  "steps_requested": 1600,
+  "steps_survived": 1600,
+  "ode_steps": 20,
+  "trace": [
+    {
+      "step": 0,
+      "bond_mean": 3.634556770324707,
+      "bond_max": 3.6345624923706055,
+      "bond_min": 3.634547233581543,
+      "radius_of_gyration": 51.95173263549805,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 51.351959228515625,
+      "native_contact_fraction": 0.0
+    },
+    {
+      "step": 200,
+      "bond_mean": 3.8463940620422363,
+      "bond_max": 4.017081260681152,
+      "bond_min": 3.641641616821289,
+      "radius_of_gyration": 15.512341499328613,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 17.235097885131836,
+      "native_contact_fraction": 0.5600000023841858
+    },
+    {
+      "step": 400,
+      "bond_mean": 3.8490898609161377,
+      "bond_max": 4.014575481414795,
+      "bond_min": 3.540597677230835,
+      "radius_of_gyration": 17.203516006469727,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 16.992170333862305,
+      "native_contact_fraction": 0.6133333444595337
+    },
+    {
+      "step": 600,
+      "bond_mean": 3.8013978004455566,
+      "bond_max": 3.9834349155426025,
+      "bond_min": 3.4984536170959473,
+      "radius_of_gyration": 10.841259002685547,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 11.409316062927246,
+      "native_contact_fraction": 0.6399999856948853
+    },
+    {
+      "step": 800,
+      "bond_mean": 3.8260204792022705,
+      "bond_max": 4.1824212074279785,
+      "bond_min": 3.6028032302856445,
+      "radius_of_gyration": 10.870257377624512,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 12.953391075134277,
+      "native_contact_fraction": 0.5333333611488342
+    },
+    {
+      "step": 1000,
+      "bond_mean": 3.790407180786133,
+      "bond_max": 4.089961528778076,
+      "bond_min": 3.4643592834472656,
+      "radius_of_gyration": 11.450811386108398,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 13.041360855102539,
+      "native_contact_fraction": 0.4266666769981384
+    },
+    {
+      "step": 1200,
+      "bond_mean": 3.8416190147399902,
+      "bond_max": 4.444613933563232,
+      "bond_min": 3.453108072280884,
+      "radius_of_gyration": 12.468904495239258,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 11.374567031860352,
+      "native_contact_fraction": 0.4399999976158142
+    },
+    {
+      "step": 1400,
+      "bond_mean": 3.7955658435821533,
+      "bond_max": 4.2052998542785645,
+      "bond_min": 3.554678440093994,
+      "radius_of_gyration": 11.266060829162598,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 8.40429973602295,
+      "native_contact_fraction": 0.41333332657814026
+    },
+    {
+      "step": 1600,
+      "bond_mean": 3.820765972137451,
+      "bond_max": 4.179505348205566,
+      "bond_min": 3.6747467517852783,
+      "radius_of_gyration": 11.177202224731445,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 11.614666938781738,
+      "native_contact_fraction": 0.3466666638851166
+    }
+  ]
+}

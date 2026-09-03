@@ -1,0 +1,86 @@
+{
+  "domain": "1hw7A02",
+  "start": "native",
+  "steps_requested": 1200,
+  "steps_survived": 1200,
+  "ode_steps": 20,
+  "trace": [
+    {
+      "step": 0,
+      "bond_mean": 3.8355307579040527,
+      "bond_max": 3.987856149673462,
+      "bond_min": 3.6918554306030273,
+      "radius_of_gyration": 12.229389190673828,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 1.7024731278070249e-06,
+      "native_contact_fraction": 1.0
+    },
+    {
+      "step": 200,
+      "bond_mean": 3.8173696994781494,
+      "bond_max": 3.9709055423736572,
+      "bond_min": 3.664159059524536,
+      "radius_of_gyration": 10.976759910583496,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 10.511309623718262,
+      "native_contact_fraction": 0.6666666865348816
+    },
+    {
+      "step": 400,
+      "bond_mean": 3.782031297683716,
+      "bond_max": 3.945730447769165,
+      "bond_min": 3.538661241531372,
+      "radius_of_gyration": 11.560929298400879,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 11.201496124267578,
+      "native_contact_fraction": 0.6666666865348816
+    },
+    {
+      "step": 600,
+      "bond_mean": 3.808328628540039,
+      "bond_max": 3.9759292602539062,
+      "bond_min": 3.4621315002441406,
+      "radius_of_gyration": 10.936758041381836,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 12.004629135131836,
+      "native_contact_fraction": 0.6399999856948853
+    },
+    {
+      "step": 800,
+      "bond_mean": 3.7943246364593506,
+      "bond_max": 3.99438738822937,
+      "bond_min": 3.5356414318084717,
+      "radius_of_gyration": 10.986236572265625,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 11.440685272216797,
+      "native_contact_fraction": 0.6266666650772095
+    },
+    {
+      "step": 1000,
+      "bond_mean": 3.7956643104553223,
+      "bond_max": 4.343526363372803,
+      "bond_min": 3.588670492172241,
+      "radius_of_gyration": 11.030684471130371,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 11.439349174499512,
+      "native_contact_fraction": 0.5199999809265137
+    },
+    {
+      "step": 1200,
+      "bond_mean": 3.834843158721924,
+      "bond_max": 4.083790302276611,
+      "bond_min": 3.418834924697876,
+      "radius_of_gyration": 19.917207717895508,
+      "clash_fraction": 0.0,
+      "finite": true,
+      "rmsd_to_native": 20.263721466064453,
+      "native_contact_fraction": 0.5333333611488342
+    }
+  ]
+}
