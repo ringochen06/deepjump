@@ -20,6 +20,11 @@ from ..config import ModelConfig
 from .conditioner import Conditioner
 from .transport import Transport
 
+# Longest CA-to-heavy-atom offset observed in mdCATH: p99.9 = 7.25 A, max = 7.49 A
+# over 17,610 occupied slots across 8 domains at 320 K and 450 K. A side chain
+# cannot reach further, so a larger value is not a conformation -- it is drift.
+MAX_HEAVY_ATOM_OFFSET_A = 7.5
+
 
 class DeepJumpLite(nn.Module):
     def __init__(self, cfg: ModelConfig, noise_sigma: float = 0.1, predict_heavy: bool = False):
@@ -158,6 +163,7 @@ class DeepJumpLite(nn.Module):
         terminal_denoise: bool = False,
         drift_anchor: str = "state",
         project_v_atom_mask: bool = True,
+        max_v_norm: float | None = MAX_HEAVY_ATOM_OFFSET_A,
     ):
         """Predict X_{t+delta} from X_t. Returns (P, V).
 
@@ -192,6 +198,15 @@ class DeepJumpLite(nn.Module):
         by 50 (3.8 -> 6.5 A). Re-masking removes that cliff, and a higher step
         count then buys ensemble spread closer to real MD.
 
+        `max_v_norm` caps each heavy-atom offset at its physical reach. V carries
+        no scale constraint of its own -- the CA-CA bond term constrains only the
+        backbone -- so its magnitude drifts upward under autoregressive rollout
+        while every conventional geometry check still passes. Measured on the
+        formal 500k checkpoint: |V| exceeds the 7.49 A data maximum by step 200,
+        reaches 20 A by step 1200 with CA-CA bond still at 3.84 A, then 141 A at
+        step 1276 and overflows to NaN at 1292. Capping the norm carried the same
+        rollout past 20,000 steps with bond at 3.89 A. Pass None to disable.
+
         When predict_heavy, V is produced the same way; else V stays V_t.
         """
         if steps < 1:
@@ -204,6 +219,8 @@ class DeepJumpLite(nn.Module):
             raise ValueError("Heun integration requires tau_max < 1")
         if drift_anchor not in {"state", "conditioner"}:
             raise ValueError("drift_anchor must be 'state' or 'conditioner'")
+        if max_v_norm is not None and max_v_norm <= 0:
+            raise ValueError("max_v_norm must be positive or None")
         device = batch["P_t"].device
         P_t, V_t = batch["P_t"], batch["V_t"]
         mask = batch["residue_mask"]
@@ -218,8 +235,11 @@ class DeepJumpLite(nn.Module):
         ctx = self.encode(model_batch)
 
         def project_v(value):
+            if max_v_norm is not None:
+                norm = value.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+                value = value * (norm.clamp(max=max_v_norm) / norm)
             if project_v_atom_mask:
-                return value * atom_mask.unsqueeze(-1)
+                value = value * atom_mask.unsqueeze(-1)
             return value
 
         if mode == "mean":

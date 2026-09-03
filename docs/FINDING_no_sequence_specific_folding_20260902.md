@@ -103,12 +103,30 @@ fails with "Invalid selection name".
 | layer | status |
 |---|---|
 | measurement instrument | fixed this session |
-| geometric stability | ~1.3-1.8e3 jumps, no clashes, correct bond lengths |
+| geometric stability | 200,000 jumps, no clashes, correct bond lengths |
 | compaction to native scale | works, from a fully extended chain |
 | **sequence-specific folding** | **not distinguishable from zero** |
-| long horizon (paper uses 3e5 jumps) | untested above ~1.5e3 |
+| long horizon (paper uses 3e5 jumps) | 2e5 verified, no degradation |
 
-The last two are what remain, and the fourth is not a budget problem. A model
+### `[MEASURED]` The horizon was an unconstrained channel, not model capacity
+
+`V` holds CA-to-heavy-atom offsets and carries no scale constraint: the CA-CA
+bond term pins the backbone only. Under rollout its magnitude drifts upward while
+every conventional check keeps passing. Real mdCATH offsets reach at most 7.49 A
+(p99.9 = 7.25, over 17,610 occupied slots). The model passes that by step 200,
+sits at 20 A by step 1200 with CA-CA bond still 3.84 A and Rg still 11 A, hits
+141 A at 1276 and overflows at 1292.
+
+Capping the norm at 7.5 A inside every ODE step (`max_v_norm`, on by default)
+carried the same rollout to **200,000 steps with no degradation**: final bond
+3.802 A, final Rg 10.83 A against a native 10.9-12.2. Rg excursions to 20-32 A
+around step 194,000 recovered on their own, which is conformational exploration
+rather than divergence. Log: `provenance/horizon_200k_vnorm_capped.log`.
+
+This is the zero-padding defect's twin. Fixing which `V` slots must be zero left
+open how large the non-zero ones may be.
+
+The remaining gap is sequence, and it is not a budget problem. A model
 that is not using sequence to decide *which* fold to form will not get there by
 training longer. Any restart under `GOAL.md`'s preregistration requirement should
 carry a sequence-specificity criterion and a random-compact-chain control from

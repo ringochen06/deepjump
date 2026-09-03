@@ -159,6 +159,10 @@ def main() -> None:
     ap.add_argument("--frame", type=int, default=0)
     ap.add_argument("--steps", type=int, default=2000)
     ap.add_argument("--ode-steps", type=int, default=20)
+    ap.add_argument("--tau-max", type=float, default=1.0,
+                    help="truncate before the 1/(1-tau) singularity; <1 needs --terminal-denoise")
+    ap.add_argument("--terminal-denoise", action="store_true")
+    ap.add_argument("--integrator", choices=("euler", "heun"), default="euler")
     ap.add_argument("--record-every", type=int, default=100)
     ap.add_argument("--shuffle-sequence", type=int, default=None, metavar="SEED",
                     help="permute res_index with this seed: keeps composition and length "
@@ -232,7 +236,8 @@ def main() -> None:
 
     trace = free_rollout(model, batch, args.steps, args.record_every,
                          native=native_reference, sampler_seed=args.seed,
-                         steps=args.ode_steps, mode="ode")
+                         steps=args.ode_steps, mode="ode", tau_max=args.tau_max,
+                         terminal_denoise=args.terminal_denoise, integrator=args.integrator)
 
     print(f"{'step':>7}{'bond mean':>11}{'Rg (A)':>9}{'clash':>9}"
           f"{'RMSD nat':>10}{'FNC':>8}  finite")
