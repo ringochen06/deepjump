@@ -75,6 +75,26 @@ native frame drifts *less* than the real trajectory does over the same elapsed
 time (RMSD 10.51, FNC 0.667 at 200 ns), so the compaction behaviour is not an
 artefact of an unstable rollout.
 
+## What it looks like
+
+![native versus the model's extended-start endpoint](figures/compaction_vs_folding_overlay.png)
+
+Blue is the real native structure of `1hw7A02`: helices, a packed core. Red is
+what the model produces from a fully extended chain after 600 jumps, superposed
+onto it at RMSD 13.05 A. The two occupy the same volume and share no fold.
+
+Per-structure views: [`figures/panel_extended_start.png`](figures/panel_extended_start.png)
+(Rg 51.95 A), [`figures/panel_step_76.png`](figures/panel_step_76.png) (11.62 A),
+[`figures/panel_final_601.png`](figures/panel_final_601.png) (10.96 A),
+[`figures/panel_native.png`](figures/panel_native.png). The endpoint panel is the
+clearest single piece of evidence: it is entirely coil, with dashed segments where
+PyMOL cannot assign continuous secondary structure at all.
+
+Reproduce with `docs/pymol/compaction_vs_folding.pml`, verified against PyMOL
+3.1.8. One naming trap worth recording: `split_states obj, 601, 601, prefix=step`
+creates `step0601` -- the state number, with no underscore. Assuming otherwise
+fails with "Invalid selection name".
+
 ## Bearing on ab initio folding
 
 | layer | status |
